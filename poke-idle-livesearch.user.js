@@ -416,7 +416,7 @@
 
     return (
       `<div class="mtal-hit-name">${esc(title)}</div>` +
-      `<div class="mtal-hit-sub">IV ${esc(h.ivTotal)}/192` +
+      `<div class="mtal-hit-sub">IV <span style="color:#f2ead0">${esc(h.ivTotal)}</span>/192` +
       (q ? ` · <span style="color:${rColor}">${q}</span>` : '') +
       (h.shiny ? ' ✨' : '') +
       `</div>`
