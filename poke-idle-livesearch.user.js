@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.4.30
+// @version      0.4.33
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -20,7 +20,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.30';
+  const VERSION = '0.4.33';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -3396,7 +3396,9 @@
     .mtal-d-qty{margin-top:12px}
     .mtal-d-qty > span{display:block;color:#9aa0b8;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
     #mtal-d-btotal{margin-top:0;text-align:left;color:#f0d78c;font-weight:600}
-    #mtal-details #mtal-d-buy{flex:1}
+    #mtal-details #mtal-d-buy,#mtal-details #mtal-d-npcgo{flex:1}
+    #mtal-details #mtal-d-npcgo{background:#2c4a2c;border-color:#3f6b3f}
+    #mtal-details #mtal-d-npcgo:hover{border-color:#b5934f}
     #mtal-mk .mk-modes{display:flex;gap:4px;padding-right:12px;border-right:1px solid #2c3148}
     #mtal-mk .mk-mode.active{background:#3d3420;border-color:#c9a44a;color:#f0d78c}
     #mtal-mk .mk-npcs{display:flex;flex-wrap:wrap;gap:4px}
@@ -3410,6 +3412,26 @@
     #mtal-mk #mk-npc .sl-grid{overflow:visible;margin:6px 0 0}
     #mtal-mk .sl-card.npc-ro{cursor:default}
     #mtal-mk .npc-note{margin-top:10px}
+    #mtal-mk #npc-filter{width:180px}
+    #mtal-mk .npc-tabs{margin-top:12px}
+    #mtal-mk .npc-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px}
+    #mtal-mk .npc-list{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+    #mtal-mk .npc-row{display:flex;align-items:center;gap:10px;padding:8px 10px;background:#1a1e30;border:1px solid #2c3148;border-radius:8px;cursor:pointer}
+    #mtal-mk .npc-row:hover{border-color:#4a4f66}
+    #mtal-mk .npc-row.on{border-color:#c9a44a;background:#2a2716}
+    #mtal-mk .npc-ri{width:36px;height:36px;flex:none;display:flex;align-items:center;justify-content:center}
+    #mtal-mk .npc-ri img{max-width:100%;max-height:100%;image-rendering:pixelated}
+    #mtal-mk .npc-rn{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+    #mtal-mk .npc-rn b{color:#f2ead0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    #mtal-mk .npc-arrow{flex:none;width:36px;height:30px;padding:0;font-size:16px;color:#f0d78c}
+    #mtal-mk .npc-chk{flex:none;width:16px;height:16px;cursor:pointer}
+    #mtal-mk .npc-foot{display:flex;align-items:center;margin-top:12px}
+    #mtal-mk .npc-slots{padding:6px 10px;border:1px solid #4a4f66;border-radius:6px;color:#c7cbe0;font-weight:600}
+    #mtal-mk .npc-primary{background:#6b5520;border-color:#c9a44a;color:#f8e7b0;padding:8px 16px;font-weight:700}
+    #mtal-mk .npc-primary:disabled{opacity:.5;cursor:default}
+    #mtal-mk .npc-bulk{display:flex;align-items:center;gap:12px;margin-top:12px}
+    #mtal-mk .npc-bulk button{background:#2c4a2c;border-color:#3f6b3f;padding:8px 14px;font-weight:600}
+    #mtal-mk .npc-bulk button:hover{border-color:#b5934f}
     #mtal-mk #mk-sell{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:0 12px 12px}
     #mtal-mk #mk-sell .sl-anun{flex:1;min-height:0;display:flex;flex-direction:column}
     #mtal-mk #mk-sell .sl-anun .mk-form,#mtal-mk #mk-sell .sl-anun .sl-bar{flex:none}
@@ -3943,6 +3965,7 @@
           <b id="npc-title"></b>
           <span id="npc-info" class="mk-dim"></span>
           <span style="flex:1"></span>
+          <input type="text" id="npc-filter" placeholder="Filtrar por nome…" autocomplete="off">
           <button type="button" id="npc-game" title="Abrir a janela original do jogo">Abrir no jogo</button>
         </div>
 
@@ -6808,7 +6831,7 @@
     trader: '/api/game/pokemaniac-trader'
   };
 
-  const npcSt = { key: null, data: {}, cards: [], loading: false, err: '' };
+  const npcSt = { key: null, data: {}, cards: [], loading: false, err: '', shopTab: 'buy' };
 
   const iconUrl = (v) => (!v ? '' : /^(\/|https?:|data:)/i.test(String(v)) ? v : '/assets/items/' + v);
 
@@ -6852,6 +6875,24 @@
 
       npcSt.data[key] = d;
 
+      if (key === 'shop') {
+        npcSt.data.depot = await gameGet(NPC_API.depot);
+
+        try {
+          const lk = await gameGet('/api/game/item/lock');
+
+          npcSt.data.locked = new Set(
+            ((lk && lk.locked) || []).map((x) => (x && typeof x === 'object' ? x.itemId || x.id : x))
+          );
+        } catch (e) {
+          npcSt.data.locked = new Set();
+        }
+
+        const a = depotToOwned(npcSt.data.depot);
+
+        if (a) setOwned(a);
+      }
+
       if (key === 'depot') {
         const a = depotToOwned(d);
 
@@ -6867,6 +6908,10 @@
   }
 
   function npcCard(icon, name, sub, click, pokeName) {
+    const fq = ($('npc-filter').value || '').trim().toLowerCase();
+
+    if (fq && !String(name).toLowerCase().includes(fq)) return '';
+
     const i = npcSt.cards.length;
     let thumb;
 
@@ -6888,6 +6933,39 @@
       <div class="sl-cname" title="${esc(name)}">${esc(name)}</div>
       <div class="mk-dim">${sub}</div>
     </${click ? 'button' : 'div'}>`;
+  }
+
+  function npcRow(icon, name, sub, click, o = {}) {
+    const fq = ($('npc-filter').value || '').trim().toLowerCase();
+
+    if (fq && !String(name).toLowerCase().includes(fq)) return '';
+
+    const i = npcSt.cards.length;
+
+    npcSt.cards.push(click || null);
+
+    return `<div class="npc-row${o.checked ? ' on' : ''}" data-nc="${i}">
+      ${o.check != null ? `<input type="checkbox" class="npc-chk" data-sid="${esc(o.check)}"${o.checked ? ' checked' : ''}>` : ''}
+      <div class="npc-ri">${icon ? `<img src="${esc(icon)}" onerror="this.parentElement.textContent='❔'">` : '❔'}</div>
+      <div class="npc-rn"><b>${esc(name)}</b><span class="mk-dim">${sub}</span></div>
+      ${
+        o.arrow
+          ? `<button type="button" class="npc-arrow" data-mv="${esc(o.id)}" data-dir="${o.arrow}" title="${o.arrow === 'store' ? 'Guardar no depósito' : 'Retirar para a mochila'}">${o.arrow === 'store' ? '→' : '←'}</button>`
+          : ''
+      }
+    </div>`;
+  }
+
+  async function depotMove(id, dir) {
+    const r = await gamePost('/api/game/depot/move', { itemId: id, dir });
+
+    npcSt.data.depot = r;
+
+    const a = depotToOwned(r);
+
+    if (a) setOwned(a);
+
+    return r;
   }
 
   const npcSec = (title, cards, empty) =>
@@ -6953,46 +7031,153 @@
           })
         );
 
-      body =
-        npcSec('Poké Balls', (d.balls || []).map((x) => sell(x, true)).join('')) +
-        npcSec('Itens', (d.items || []).map((x) => sell(x, false)).join(''));
-    } else if (key === 'depot') {
-      info = 'Depósito: ' + (d.depot || []).length + '/' + d.maxSlots + ' slots';
+      const inv = (npcSt.data.depot && npcSt.data.depot.inventory) || [];
 
-      const mv = (x, inInv) =>
-        npcCard(iconUrl(x.icon), x.name, fmt(x.quantity) + '×', () =>
+      const sellHit = (x) =>
           npcHit({
             name: x.name,
             category: x.category,
             quantity: x.quantity,
             price: x.npcPrice || 0,
-            priceLabel: 'Valor no NPC',
+            priceLabel: 'O NPC paga por unidade',
             raw: { icon: iconUrl(x.icon) },
             npcAction: {
-              label: inInv ? '📦 Guardar no depósito' : '🎒 Retirar para a mochila',
-              note: 'Move o stack inteiro (' + fmt(x.quantity) + '×).',
-              run: async () => {
-                const r = await gamePost('/api/game/depot/move', { itemId: x.id, dir: inInv ? 'store' : 'withdraw' });
+              label: '💰 Vender',
+              needQty: true,
+              max: x.quantity,
+              unit: x.npcPrice || 0,
+              confirm: (q) => 'Vender ' + q + '× ' + x.name + ' por $ ' + fmt(q * (x.npcPrice || 0)) + '?',
+              run: async (q) => {
+                const r = await gamePost('/api/game/shop/sell', { items: [{ itemId: x.id, qty: q }] });
 
-                npcSt.data.depot = r;
-
-                const a = depotToOwned(r);
-
-                if (a) setOwned(a);
-
-                toast((inInv ? 'Guardado: ' : 'Retirado: ') + x.name);
+                toast('Vendido: ' + fmt(r.soldCount || q) + '× ' + x.name + (r.goldGained ? ' · +$ ' + fmt(r.goldGained) : ''));
                 hideDetails();
-                npcRender();
+                npcLoad('shop');
               }
             }
-          })
-        );
+          });
 
       body =
-        '<div class="npc-cols">' +
-        npcSec('🎒 Mochila (' + (d.inventory || []).length + ')', (d.inventory || []).map((x) => mv(x, true)).join(''), 'Mochila vazia.') +
-        npcSec('📦 Depósito (' + (d.depot || []).length + ')', (d.depot || []).map((x) => mv(x, false)).join(''), 'Depósito vazio.') +
-        '</div>';
+        `<div class="mk-seg npc-tabs">
+          <button type="button" data-st="buy" class="${npcSt.shopTab === 'buy' ? 'on' : ''}">Comprar</button>
+          <button type="button" data-st="sell" class="${npcSt.shopTab === 'sell' ? 'on' : ''}">Vender</button>
+        </div>` +
+        (npcSt.shopTab === 'buy'
+          ? npcSec('Poké Balls', (d.balls || []).map((x) => sell(x, true)).join('')) +
+            npcSec('Itens', (d.items || []).map((x) => sell(x, false)).join(''))
+          : (() => {
+              const locked = npcSt.data.locked || new Set();
+              const list = inv.filter((x) => x.npcPrice > 0 && !locked.has(x.id));
+              const sel = npcSt.sellSel || (npcSt.sellSel = new Set());
+
+              [...sel].forEach((id) => {
+                if (!list.some((x) => x.id === id)) sel.delete(id);
+              });
+
+              npcSt.sellList = list;
+
+              const chosen = list.filter((x) => sel.has(x.id));
+              const tot = chosen.reduce((acc, x) => acc + x.quantity * x.npcPrice, 0);
+              const allOn = list.length > 0 && chosen.length === list.length;
+
+              return `<div class="npc-bar">
+                  <button type="button" data-selall="1">${allOn ? 'Desmarcar todos' : 'Selecionar todos'}</button>
+                  <button type="button" data-selloot="1">Só loot</button>
+                  <span class="mk-dim">${chosen.length} de ${list.length} selecionados</span>
+                  <span style="flex:1"></span>
+                  <button type="button" data-sellsel="1" class="npc-primary"${chosen.length ? '' : ' disabled'}>💰 Vender selecionados · $ ${fmt(tot)}</button>
+                </div>
+                <div class="npc-list">${
+                  list
+                    .map((x) =>
+                      npcRow(
+                        iconUrl(x.icon),
+                        x.name,
+                        fmt(x.quantity) + '× · $ ' + fmt(x.npcPrice) + '/un = $ ' + fmt(x.quantity * x.npcPrice),
+                        () => sellHit(x),
+                        { check: x.id, checked: sel.has(x.id) }
+                      )
+                    )
+                    .join('') || '<div class="mk-empty">Nada vendável na mochila.</div>'
+                }</div>
+                <div class="mk-dim npc-note">Itens travados no jogo ficam de fora. Clique no item para vender só uma parte.</div>`;
+            })());
+    } else if (key === 'depot') {
+      const inv = d.inventory || [];
+      const dep = d.depot || [];
+      const cats = [...new Set(inv.concat(dep).map((x) => x.category).filter(Boolean))].sort();
+      const cat = npcSt.depotCat || '';
+      const tab = npcSt.depotTab || 'items';
+      const byCat = (x) => !cat || x.category === cat;
+
+      const tabs = `<div class="mk-seg npc-tabs">${[
+        ['items', '🎒 Itens'],
+        ['poke', '⚔ Pokémon'],
+        ['fitems', '👪 Família: Itens'],
+        ['fpoke', '👪 Família: Pokémon']
+      ]
+        .map(([k, l]) => `<button type="button" data-dt="${k}" class="${tab === k ? 'on' : ''}">${l}</button>`)
+        .join('')}</div>`;
+
+      const hitOf = (x, inInv) => () =>
+        npcHit({
+          name: x.name,
+          category: x.category,
+          quantity: x.quantity,
+          price: x.npcPrice || 0,
+          priceLabel: 'Valor no NPC',
+          raw: { icon: iconUrl(x.icon) },
+          npcAction: {
+            label: inInv ? '📦 Guardar no depósito' : '🎒 Retirar para a mochila',
+            note: 'Move o stack inteiro (' + fmt(x.quantity) + '×).',
+            run: async () => {
+              await depotMove(x.id, inInv ? 'store' : 'withdraw');
+
+              toast((inInv ? 'Guardado: ' : 'Retirado: ') + x.name);
+              hideDetails();
+              npcRender();
+            }
+          }
+        });
+
+      const row = (x, inInv) =>
+        npcRow(iconUrl(x.icon), x.name, fmt(x.quantity) + '×' + (x.npcPrice ? ' · $ ' + fmt(x.npcPrice) : ''), hitOf(x, inInv), {
+          arrow: inInv ? 'store' : 'withdraw',
+          id: x.id
+        });
+
+      if (tab !== 'items') {
+        body =
+          tabs +
+          '<div class="mk-empty">Esta aba ainda não foi capturada. Use "Abrir no jogo" por enquanto.</div>';
+      } else {
+        const L = inv.filter(byCat).map((x) => row(x, true)).join('');
+        const R = dep.filter(byCat).map((x) => row(x, false)).join('');
+
+        body =
+          tabs +
+          `<div class="npc-bar">
+            <select id="npc-cat">
+              <option value="">Todas as categorias</option>
+              ${cats.map((c) => `<option value="${esc(c)}"${c === cat ? ' selected' : ''}>${esc(cap(c))}</option>`).join('')}
+            </select>
+          </div>
+          <div class="npc-cols">
+            <div class="mk-sec">
+              <div class="mk-sec-h">🎒 Mochila (${inv.length})</div>
+              <div class="npc-list">${L || '<div class="mk-empty">Nada na mochila (confira os filtros).</div>'}</div>
+            </div>
+            <div class="mk-sec">
+              <div class="mk-sec-h">📦 Depósito (${dep.length})</div>
+              <div class="npc-list">${R || '<div class="mk-empty">Nada no depósito (confira os filtros).</div>'}</div>
+            </div>
+          </div>
+          <div class="npc-foot">
+            <span class="npc-slots">📦 ${dep.length}/${d.maxSlots} slots</span>
+            <span style="flex:1"></span>
+            <button type="button" data-storeall="1" class="npc-primary"${inv.length ? '' : ' disabled'}>Guardar tudo</button>
+          </div>`;
+      }
     } else if (key === 'flint') {
       info = 'Saldo: $ ' + fmt(d.gold) + ' · Gemstones: ' + fmt(d.gemQty || 0);
 
@@ -7090,7 +7275,145 @@
     npcSt.pseudo.forEach(ensureSprite);
   }
 
+  $('npc-filter').addEventListener('input', () => npcRender());
+
+  $('npc-body').addEventListener('change', (e) => {
+    if (e.target.id === 'npc-cat') {
+      npcSt.depotCat = e.target.value;
+      npcRender();
+
+      return;
+    }
+
+    const c = e.target.closest('.npc-chk');
+
+    if (!c) return;
+
+    const sel = npcSt.sellSel || (npcSt.sellSel = new Set());
+    const id = +c.dataset.sid;
+
+    if (c.checked) {
+      sel.add(id);
+    } else {
+      sel.delete(id);
+    }
+
+    npcRender();
+  });
+
   $('npc-body').addEventListener('click', (e) => {
+    if (e.target.closest('.npc-chk')) return;
+
+    const mvb = e.target.closest('[data-mv]');
+
+    if (mvb) {
+      mvb.disabled = true;
+
+      depotMove(+mvb.dataset.mv, mvb.dataset.dir)
+        .then(() => {
+          hideDetails();
+          npcRender();
+        })
+        .catch((err) => {
+          toast('Erro: ' + ((err && err.message) || err));
+          mvb.disabled = false;
+        });
+
+      return;
+    }
+
+    if (e.target.closest('[data-storeall]')) {
+      const inv = ((npcSt.data.depot && npcSt.data.depot.inventory) || []).slice();
+
+      if (!inv.length || !confirm('Guardar todos os ' + inv.length + ' itens da mochila no depósito?')) return;
+
+      e.target.closest('[data-storeall]').disabled = true;
+
+      (async () => {
+        let n = 0;
+
+        for (const x of inv) {
+          try {
+            await depotMove(x.id, 'store');
+            n++;
+          } catch (err) {
+            toast('Parou em ' + x.name + ': ' + ((err && err.message) || err));
+            break;
+          }
+        }
+
+        toast('Guardados: ' + n + ' itens.');
+        hideDetails();
+        npcRender();
+      })();
+
+      return;
+    }
+
+    if (e.target.closest('[data-dt]')) {
+      npcSt.depotTab = e.target.closest('[data-dt]').dataset.dt;
+      hideDetails();
+      npcRender();
+
+      return;
+    }
+
+    const list = npcSt.sellList || [];
+    const sel = npcSt.sellSel || (npcSt.sellSel = new Set());
+
+    if (e.target.closest('[data-selall]')) {
+      if (list.length && list.every((x) => sel.has(x.id))) {
+        sel.clear();
+      } else {
+        list.forEach((x) => sel.add(x.id));
+      }
+
+      npcRender();
+
+      return;
+    }
+
+    if (e.target.closest('[data-selloot]')) {
+      sel.clear();
+      list.filter((x) => x.category === 'loot').forEach((x) => sel.add(x.id));
+      npcRender();
+
+      return;
+    }
+
+    const ss = e.target.closest('[data-sellsel]');
+
+    if (ss) {
+      const chosen = list.filter((x) => sel.has(x.id));
+      const tot = chosen.reduce((acc, x) => acc + x.quantity * x.npcPrice, 0);
+
+      if (!chosen.length) return;
+      if (!confirm('Vender ' + chosen.length + ' tipos por $ ' + fmt(tot) + '?\n\n' + chosen.map((x) => fmt(x.quantity) + '× ' + x.name).join('\n'))) return;
+
+      ss.disabled = true;
+
+      gamePost('/api/game/shop/sell', { items: chosen.map((x) => ({ itemId: x.id, qty: x.quantity })) })
+        .then((r) => toast('Vendido: ' + fmt(r.soldCount || 0) + ' itens · +$ ' + fmt(r.goldGained || 0)))
+        .catch((err) => toast('Erro: ' + ((err && err.message) || err)))
+        .finally(() => {
+          sel.clear();
+          hideDetails();
+          npcLoad('shop');
+        });
+
+      return;
+    }
+
+    const t = e.target.closest('[data-st]');
+
+    if (t) {
+      npcSt.shopTab = t.dataset.st;
+      hideDetails();
+      npcRender();
+
+      return;
+    }
+
     const c = e.target.closest('[data-nc]');
 
     if (!c) return;
