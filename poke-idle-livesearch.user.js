@@ -20,7 +20,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.11';
+  const VERSION = '0.4.12';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
