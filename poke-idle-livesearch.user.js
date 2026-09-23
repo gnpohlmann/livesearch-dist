@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.4.12
+// @version      0.4.26
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -20,7 +20,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.12';
+  const VERSION = '0.4.26';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -28,6 +28,7 @@
   const CATEGORIES = ['Items', 'Stones', 'Poke Balls', 'Diamonds'];
   const CATEGORY_LABELS = { Diamonds: 'Diamantes' };
   const catLabel = (c) => CATEGORY_LABELS[c] || c || '';
+  const MK_CATS = [['all', 'Todos'], ['Items', 'Itens'], ['Stones', 'Stones'], ['Poke Balls', 'Poké Balls'], ['Diamonds', 'Diamantes'], ['pokemon', 'Pokémon']];
   const DEBUG = true;
 
   const log = (...a) => DEBUG && console.log('%c[Alertas]', 'color:#e0b95a;font-weight:bold', ...a);
@@ -103,6 +104,76 @@
   let panelOpen = false;
   let activeTab = 'hits';
   let detailsHid = null;
+  let detailsAnchor = 'mtal-panel';
+
+  /* ---------- inventário (itens) ---------- */
+  let ownedCache = store.get('ownedItems', null);
+
+  const isOwnedArr = (v) =>
+    Array.isArray(v) &&
+    v.length > 0 &&
+    v[0] &&
+    typeof v[0] === 'object' &&
+    'itemId' in v[0] &&
+    'quantity' in v[0] &&
+    Object.keys(v[0]).length <= 4;
+
+  function findOwnedIn(v, depth) {
+    if (isOwnedArr(v)) return v;
+    if (!v || typeof v !== 'object' || depth > 3) return null;
+
+    for (const k in v) {
+      const r = findOwnedIn(v[k], depth + 1);
+
+      if (r) return r;
+    }
+
+    return null;
+  }
+
+  function setOwned(list) {
+    const next = list.map((x) => ({ itemId: x.itemId, quantity: x.quantity }));
+
+    if (ownedCache && JSON.stringify(ownedCache.list) === JSON.stringify(next)) {
+      ownedCache.t = Date.now();
+      return;
+    }
+
+    ownedCache = { t: Date.now(), list: next };
+    store.set('ownedItems', ownedCache);
+
+    try {
+      slRenderOwned();
+    } catch (e) {}
+  }
+
+  /* ---------- memória de anúncios (p/ histórico) ---------- */
+  const SEEN_MAX = 400;
+  const seenL = store.get('seenListings', {}) || {};
+  const seenKey = (name, price, cur) => [name, price, cur].join('|');
+
+  function rememberListings(list) {
+    let n = 0;
+
+    (list || []).forEach((l) => {
+      if (!l || l.kind !== 'pokemon' || !l.name) return;
+
+      seenL[seenKey(l.name, l.price, l.currency)] = { ...l, _t: Date.now() };
+      n++;
+    });
+
+    if (!n) return;
+
+    const ks = Object.keys(seenL);
+
+    if (ks.length > SEEN_MAX) {
+      ks.sort((a, b) => seenL[a]._t - seenL[b]._t)
+        .slice(0, ks.length - SEEN_MAX)
+        .forEach((k) => delete seenL[k]);
+    }
+
+    store.set('seenListings', seenL);
+  }
 
   /* ---------- sessão ---------- */
   let captured = null;
@@ -145,7 +216,31 @@
         }
       } catch (e) {}
 
-      return _fetch.apply(this, arguments);
+      const res = _fetch.apply(this, arguments);
+
+      try {
+        const u = String((input && input.url) || input || '');
+
+        if (u.includes('/api/game/market') && u.includes('browse=pokemon')) {
+          res
+            .then((r) => r.clone().json())
+            .then((d) => rememberListings(d && d.listings))
+            .catch(() => {});
+        }
+
+        if (u.includes('/api/game') && !u.includes('/api/game/market')) {
+          res
+            .then((r) => r.clone().json())
+            .then((d) => {
+              const a = findOwnedIn(d, 0);
+
+              if (a) setOwned(a);
+            })
+            .catch(() => {});
+        }
+      } catch (e) {}
+
+      return res;
     };
   } catch (e) {
     log('não consegui observar o fetch:', e);
@@ -246,7 +341,7 @@
     return p;
   }
 
-  async function buyListing(id, quantity) {
+  async function mkAction(body) {
     const auths = getAuths();
 
     if (!auths.length) {
@@ -266,11 +361,7 @@
             authorization: a,
             'content-type': 'application/json'
           },
-          body: JSON.stringify({
-            action: 'buy',
-            id,
-            quantity
-          })
+          body: JSON.stringify(body)
         });
       } catch (e) {
         lastErr = e;
@@ -300,6 +391,14 @@
     throw new Error(
       'sessão expirada (' + status + '): abra o Market 1x'
     );
+  }
+
+  function buyListing(id, quantity) {
+    return mkAction({
+      action: 'buy',
+      id,
+      quantity
+    });
   }
 
   function queryOf(a) {
@@ -1215,6 +1314,9 @@
     const h =
       hits.find(
         (x) => x.hid === hid
+      ) ||
+      mk.rows.find(
+        (x) => x.hid === hid
       );
 
     if (!h) return;
@@ -1296,6 +1398,18 @@
       if (idx >= 0) {
         hits.splice(idx, 1);
       }
+
+      const mi =
+        mk.rows.findIndex(
+          (x) => x.hid === hid
+        );
+
+      if (mi >= 0) {
+        mk.rows.splice(mi, 1);
+        mkRender();
+      }
+
+      rememberListings([h.raw]);
 
       state.purchased.unshift({
         ...h,
@@ -1928,20 +2042,24 @@
 
       ${
         h.quantity != null
-          ? `<div class="mtal-d-row"><span>Quantidade</span><span>${esc(
-              h.quantity
+          ? `<div class="mtal-d-row"><span>${h.inventory ? 'Você tem' : 'Quantidade'}</span><span>${esc(
+              fmt(h.quantity)
             )}</span></div>`
           : ''
       }
 
-      <div class="mtal-d-row">
+      ${
+        h.inventory || h.at
+          ? ''
+          : `<div class="mtal-d-row">
         <span>Abaixo do NPC</span>
         <span>${
           h.belowNpc
             ? 'Sim'
             : 'Não'
         }</span>
-      </div>
+      </div>`
+      }
     `;
 
     $('mtal-d-body').innerHTML = `
@@ -1980,10 +2098,51 @@
 
       ${pokeBlock}
 
-      <div id="mtal-d-price">
+      ${
+        h.at
+          ? `<div class="mtal-d-row"><span>Data</span><span>${esc(new Date(h.at).toLocaleString('pt-BR'))}</span></div>`
+          : ''
+      }
+
+      ${
+        h.inventory
+          ? `<div id="mtal-d-price" class="mtal-d-sell">
+        ${
+          h.kind === 'pokemon'
+            ? ''
+            : `<span>Quantidade</span>
+
+        <div class="mtal-d-sellrow">
+          <input type="text" id="mtal-d-sqty" value="1" inputmode="numeric">
+          <button type="button" id="mtal-d-smax">máx</button>
+        </div>`
+        }
+
+        <span>${h.kind === 'pokemon' ? 'Anunciar por' : 'Preço por unidade'}</span>
+
+        <div class="mtal-d-sellrow">
+          <input type="text" id="mtal-d-sprice" placeholder="0" inputmode="numeric">
+
+          <select id="mtal-d-scur">
+            <option value="GOLD">$ Dólares</option>
+            <option value="DIAMONDS">💎 Diamantes</option>
+          </select>
+        </div>
+
+        <button type="button" id="mtal-d-sgo">$ Anunciar</button>
+
+        ${
+          h.price
+            ? `<div class="mtal-d-npc">Valor no NPC: $ ${esc(fmt(h.price))}</div>`
+            : ''
+        }
+      </div>`
+          : `<div id="mtal-d-price">
         <span>${
           isPurchased
-            ? 'Comprado por'
+            ? h.sold
+              ? 'Vendido por'
+              : 'Comprado por'
             : 'Preço unitário'
         }</span>
 
@@ -1993,10 +2152,11 @@
           )}
           ${esc(priceTxt)}
         </b>
-      </div>
+      </div>`
+      }
 
       ${
-        isPurchased
+        isPurchased || h.inventory
           ? ''
           : `<div id="mtal-d-actions">
         <button
@@ -2035,7 +2195,46 @@
       );
     }
 
-    if (!isPurchased) {
+    if (h.inventory) {
+      const sp = $('mtal-d-sprice');
+      const sc = $('mtal-d-scur');
+      const btn = $('mtal-d-sgo');
+
+      sc.value = sl.lastCur;
+
+      const go = () =>
+        slSell(
+          h.invRef,
+          h.kind === 'pokemon' ? 'pokemon' : 'item',
+          mkNum('mtal-d-sprice', true),
+          sc.value,
+          h.kind === 'pokemon' ? 1 : Math.floor(mkNum('mtal-d-sqty', true) || 0),
+          btn
+        );
+
+      const btnLabel = () => {
+        btn.textContent = (sc.value === 'DIAMONDS' ? '💎' : '$') + ' Anunciar';
+      };
+
+      btnLabel();
+
+      btn.addEventListener('click', go);
+      sc.addEventListener('change', () => {
+        sl.lastCur = sc.value;
+        btnLabel();
+      });
+      sp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') go();
+      });
+
+      if ($('mtal-d-smax')) {
+        $('mtal-d-smax').addEventListener('click', () => ($('mtal-d-sqty').value = h.invRef.owned));
+      }
+
+      setTimeout(() => sp.focus(), 0);
+    }
+
+    if (!isPurchased && !h.inventory) {
       $('mtal-d-market').addEventListener(
         'click',
         () =>
@@ -2073,18 +2272,25 @@
 
   function positionDetails() {
     const d = $('mtal-details');
-    const p = $('mtal-panel');
+    const p = $(detailsAnchor);
 
-    if (!d || d.style.display !== 'block' || p.style.display !== 'block') return;
+    if (!d || !p || d.style.display !== 'block' || getComputedStyle(p).display === 'none') return;
 
     const r = p.getBoundingClientRect();
+    let left = r.right + 10;
 
-    d.style.left = (r.right + 10) + 'px';
+    if (left + d.offsetWidth > window.innerWidth) {
+      left = Math.max(0, r.right - d.offsetWidth - 10);
+    }
+
+    d.style.left = left + 'px';
     d.style.top = 'auto';
     d.style.bottom = Math.max(0, window.innerHeight - r.bottom) + 'px';
   }
 
-  function showDetails(h) {
+  function showDetails(h, anchor) {
+    detailsAnchor = anchor || 'mtal-panel';
+
     renderDetails(h);
 
     $('mtal-details')
@@ -2225,7 +2431,32 @@
       Date.now();
   }
 
+  function readOwnedFromMarket() {
+    const win = document.querySelector('.mkt2-window');
+
+    if (!win) return;
+
+    let f = fiberOfEl(win);
+
+    for (let i = 0; f && i < 40; i++, f = f.return) {
+      if (typeof f.type === 'string') continue;
+
+      for (const h of hookNodes(f)) {
+        const v = h.queue ? h.queue.lastRenderedState : h.memoizedState;
+
+        if (isOwnedArr(v)) {
+          setOwned(v);
+          return;
+        }
+      }
+    }
+  }
+
   async function tick() {
+    try {
+      readOwnedFromMarket();
+    } catch (e) {}
+
     try {
       if (state.on) {
         const now =
@@ -2371,7 +2602,7 @@
 
   style.textContent = `
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-    #mtal-fab-row,#mtal-fab-row *,#mtal-panel,#mtal-panel *,#mtal-details,#mtal-details *{font-family:Inter,sans-serif!important}
+    #mtal-fab-row,#mtal-fab-row *,#mtal-panel,#mtal-panel *,#mtal-details,#mtal-details *,#mtal-mk,#mtal-mk *{font-family:Inter,sans-serif!important}
     #mtal-fab-row{position:fixed;left:16px;bottom:16px;z-index:2147483646;display:flex;align-items:center;gap:8px}
     #mtal-fab{background:#252a3d;color:#e8e3d0;border:1px solid #4a4f66;border-radius:8px;padding:8px 12px;font:bold 13px Inter,sans-serif;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.5)}
     #mtal-fab:hover{border-color:#b5934f}
@@ -2865,6 +3096,110 @@
       padding:6px;
       border-radius:6px
     }
+
+    #mtal-mk{position:fixed;left:16px;top:4vh;width:min(1240px,calc(100vw - 350px));min-width:760px;height:92vh;z-index:2147483646;background:#12141f;color:#e8e3d0;border:1px solid #c9a44a;border-radius:10px;font:12px/1.4 Inter,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.6);display:none;flex-direction:column;overflow:hidden}
+    #mtal-mk [hidden]{display:none!important}
+    #mtal-mk button{background:#252a3d;color:#e8e3d0;border:1px solid #4a4f66;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px}
+    #mtal-mk button:hover{border-color:#b5934f}
+    #mtal-mk button:disabled{opacity:.6;cursor:default}
+    #mtal-mk .mk-head{display:flex;align-items:center;gap:12px;padding:10px 12px;border-bottom:1px solid #232840}
+    #mtal-mk .mk-head b{color:#e0b95a;font-size:14px}
+    #mtal-mk .mk-cats{display:flex;gap:4px}
+    #mtal-mk .mk-cat.active{background:#3d3420;border-color:#c9a44a;color:#f0d78c}
+    #mtal-mk .mk-filters{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:10px 12px 8px}
+    #mtal-mk .mk-f{display:inline-flex;align-items:center;gap:5px;color:#9aa0b8}
+    #mtal-mk label.mk-f{cursor:pointer}
+    #mtal-mk input[type=text],#mtal-mk select{background:#0d0f18;color:#e8e3d0;border:1px solid #4a4f66;border-radius:6px;padding:5px 7px;font-size:12px;width:56px;box-sizing:border-box}
+    #mtal-mk #mk-q{width:200px}
+    #mtal-mk #mk-pmax{width:96px}
+    #mtal-mk select{width:auto}
+    #mtal-mk .mk-chips{display:flex;flex-wrap:wrap;gap:6px;padding:0 12px 10px}
+    #mtal-mk .mk-chip{padding:3px 11px;border-radius:999px;background:transparent;font-size:11px;font-weight:600;opacity:.5}
+    #mtal-mk .mk-chip.on{opacity:1;background:#1a1e30}
+    #mtal-mk .mk-body{flex:1;min-height:0;display:grid;grid-template-columns:150px 230px minmax(0,1fr);border-top:1px solid #232840}
+    #mtal-mk .mk-side{display:flex;flex-direction:column;gap:4px;padding:10px;border-right:1px solid #232840;overflow:auto}
+    #mtal-mk .mk-side .mk-cat{text-align:left;padding:9px 12px;font-weight:600}
+    #mtal-mk .mk-fcol{display:flex;flex-direction:column;gap:12px;padding:10px 12px;border-right:1px solid #232840;overflow:auto;scrollbar-width:thin}
+    #mtal-mk .mk-fh{color:#e0b95a;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+    #mtal-mk .mk-fl{display:flex;flex-direction:column;gap:5px;color:#9aa0b8;font-size:11px}
+    #mtal-mk .mk-fcol input[type=text],#mtal-mk .mk-fcol select{width:100%}
+    #mtal-mk .mk-range{display:flex;align-items:center;gap:6px}
+    #mtal-mk .mk-range input[type=text]{flex:1;min-width:0}
+    #mtal-mk .mk-range i{font-style:normal;color:#7c829c}
+    #mtal-mk .mk-chk{display:flex;align-items:center;gap:6px;color:#c7cbe0;cursor:pointer}
+    #mtal-mk .mk-fcol .mk-chips{padding:0}
+    #mtal-mk .mk-res{display:flex;flex-direction:column;min-width:0;min-height:0}
+    #mtal-mk .mk-table-wrap{flex:1;min-height:0;overflow:auto;scrollbar-width:thin}
+    #mtal-mk table{width:100%;border-collapse:collapse}
+    #mtal-mk thead th{position:sticky;top:0;z-index:1;background:#171a28;color:#9aa0b8;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;text-align:left;padding:8px 10px;border-bottom:1px solid #2c3148;white-space:nowrap;user-select:none}
+    #mtal-mk thead th.r{text-align:right}
+    #mtal-mk th.mk-sortable{cursor:pointer}
+    #mtal-mk th.mk-sortable:hover,#mtal-mk th.on{color:#e0b95a}
+    #mtal-mk tbody td{padding:6px 10px;border-bottom:1px solid #1d2133;vertical-align:middle;white-space:nowrap}
+    #mtal-mk tbody tr:hover td{background:#1a1e30}
+    #mtal-mk .mk-img{width:44px;padding:4px 6px}
+    #mtal-mk .mk-thumb{width:40px;height:40px;display:flex;align-items:center;justify-content:center;font-size:16px}
+    #mtal-mk .mk-thumb img{width:100%;height:100%;object-fit:contain;image-rendering:pixelated}
+    #mtal-mk .mk-name{font-weight:600;color:#f2ead0;font-size:13px}
+    #mtal-mk .mk-iv b{color:#f2ead0}
+    #mtal-mk .mk-iv span{color:#7c829c}
+    #mtal-mk .mk-iv i{display:block;width:70px;height:3px;background:#2c3148;border-radius:2px;margin-top:3px;overflow:hidden}
+    #mtal-mk .mk-iv em{display:block;height:100%;background:#c9a44a}
+    #mtal-mk .mk-price{color:#f0d78c;font-weight:700;text-align:right}
+    #mtal-mk .mk-acts{text-align:right;width:1%}
+    #mtal-mk .mk-acts button{width:30px;height:30px;padding:0;margin-left:4px;display:inline-flex;align-items:center;justify-content:center;font-size:14px;vertical-align:middle}
+    #mtal-mk .mk-acts svg{display:block}
+    #mtal-mk .mk-empty{text-align:center;color:#7c829c;padding:30px}
+    #mtal-mk .mk-foot{display:flex;align-items:center;gap:10px;padding:8px 12px;border-top:1px solid #232840;color:#9aa0b8}
+    #mtal-mk:not([data-mode="buy"]) .mk-buyv,#mtal-mk:not([data-mode="sell"]) .mk-sellv,#mtal-mk:not([data-mode="hist"]) .mk-histv{display:none!important}
+    #mtal-mk #mk-hist{flex:1;min-height:0;overflow:auto;padding:0 12px 12px;scrollbar-width:thin}
+    #mtal-mk .hist-cols{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+    #mtal-mk .mk-seg{display:flex}
+    #mtal-mk .mk-seg button{border-radius:0}
+    #mtal-mk .mk-seg button:first-child{border-radius:6px 0 0 6px}
+    #mtal-mk .mk-seg button:last-child{border-radius:0 6px 6px 0;border-left:none}
+    #mtal-mk .mk-seg button.on{background:#3d3420;border-color:#c9a44a;color:#f0d78c}
+    #mtal-mk #sl-filter{width:180px}
+    #mtal-mk .sl-grid{flex:1;min-height:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));grid-auto-rows:max-content;align-content:start;gap:8px;margin:10px 0;overflow:auto;padding:2px;scrollbar-width:thin}
+    #mtal-mk .sl-grid .mk-empty{grid-column:1/-1}
+    #mtal-mk .sl-card{display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 6px;background:#1a1e30;border:1px solid #2c3148;border-radius:8px;min-width:0}
+    #mtal-mk .sl-card.on{border-color:#c9a44a;background:#2a2716}
+    #mtal-mk .sl-thumb{width:44px;height:44px;display:flex;align-items:center;justify-content:center;font-size:16px}
+    #mtal-mk .sl-thumb img{max-width:100%;max-height:100%;image-rendering:pixelated}
+    #mtal-mk .sl-cname{font-size:11px;font-weight:600;color:#f2ead0;line-height:1.2;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    #mtal-mk .sl-bar{padding:10px;background:#171a28;border:1px solid #2c3148;border-radius:8px}
+    #mtal-mk .sl-pf{margin-top:8px}
+    #mtal-mk #sl-rar{padding:0}
+    #mtal-mk .sl-grid.list{display:block}
+    #mtal-mk .sl-row,#mtal-mk .mtal-mkrow{cursor:pointer}
+    #mtal-mk .mtal-mkrow.on td{background:#2a2716}
+    #mtal-mk .sl-row.on td{background:#2a2716}
+    #mtal-mk .sl-table{width:100%}
+    #mtal-mk .mk-coll{cursor:pointer;user-select:none;display:flex;align-items:center;gap:8px;padding:10px 12px;background:#171a28;border:1px solid #2c3148;border-radius:8px;transition:border-color .15s,color .15s}
+    #mtal-mk .mk-coll:hover{color:#f0d78c;border-color:#b5934f}
+    #mtal-mk .mk-coll::after{content:'clique para expandir/recolher';margin-left:auto;font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;color:#7c829c}
+    #mtal-d-price.mtal-d-sell{text-align:left}
+    .mtal-d-sellrow{display:flex;gap:6px;margin:4px 0 8px}
+    .mtal-d-sellrow input,.mtal-d-sellrow select{background:#0d0f18;color:#e8e3d0;border:1px solid #4a4f66;border-radius:6px;padding:7px 9px;font-size:13px}
+    .mtal-d-sellrow input{flex:1;min-width:0}
+    #mtal-details #mtal-d-sgo{width:100%;padding:10px;background:#2c4a2c;border-color:#3f6b3f}
+    #mtal-details #mtal-d-sgo:hover{border-color:#b5934f}
+    .mtal-d-npc{margin-top:8px;color:#7c829c;font-size:11px;text-align:center}
+    #mtal-mk .mk-modes{display:flex;gap:4px;padding-right:12px;border-right:1px solid #2c3148}
+    #mtal-mk .mk-mode.active{background:#3d3420;border-color:#c9a44a;color:#f0d78c}
+    #mtal-mk #mk-sell{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:0 12px 12px}
+    #mtal-mk #mk-sell .sl-anun{flex:1;min-height:0;display:flex;flex-direction:column}
+    #mtal-mk #mk-sell .sl-anun .mk-form,#mtal-mk #mk-sell .sl-anun .sl-bar{flex:none}
+    #mtal-mk #mk-sell .sl-minesec{flex:none;border-top:1px solid #232840;padding-top:10px}
+    #mtal-mk #mk-sell .sl-minesec .mk-sec-h{margin-bottom:0}
+    #mtal-mk #sl-mine-wrap{max-height:38vh;overflow:auto;margin-top:8px;scrollbar-width:thin}
+    #mtal-mk .mk-sec{margin-top:14px}
+    #mtal-mk .mk-sec-h{color:#e0b95a;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px}
+    #mtal-mk .mk-form{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;color:#9aa0b8}
+    #mtal-mk .mk-dim{color:#7c829c;font-size:11px}
+    #mtal-mk .mk-tag{display:inline-block;padding:1px 8px;border-radius:999px;font-size:10.5px;font-weight:700}
+    #mtal-mk .mk-tag.buy{background:#1f2f45;color:#8fc1ff}
+    #mtal-mk .mk-tag.sold{background:#2c3a22;color:#b6e08a}
   `;
 
   document.head.appendChild(
@@ -2931,6 +3266,13 @@
               title="Som do alerta"
             ></select>
           </div>
+
+          <button
+            id="mtal-mkopen"
+            title="Mercado"
+          >
+            🏪
+          </button>
 
           <button
             id="mtal-osnotify"
@@ -3160,6 +3502,230 @@
 
       <div id="mtal-footer">
         LiveSearch v${VERSION}
+      </div>
+    </div>
+
+    <div id="mtal-mk" data-mode="buy">
+      <div class="mk-head">
+        <b>🏪 Mercado</b>
+
+        <div class="mk-modes">
+          <button type="button" class="mk-mode active" data-mode="buy">Comprar</button>
+          <button type="button" class="mk-mode" data-mode="sell">Vendas</button>
+          <button type="button" class="mk-mode" data-mode="hist">Histórico</button>
+        </div>
+
+        <span style="flex:1"></span>
+
+        <button type="button" id="mk-refresh" title="Atualizar">↻</button>
+        <button type="button" id="mk-close" title="Fechar (Esc)">✕</button>
+      </div>
+
+      <div class="mk-body mk-buyv">
+        <nav class="mk-side">
+          ${MK_CATS.map(
+            ([v, l]) =>
+              `<button type="button" class="mk-cat" data-cat="${esc(v)}">${esc(l)}</button>`
+          ).join('')}
+        </nav>
+
+        <aside class="mk-fcol" id="mk-filters">
+          <div class="mk-fh">Filtros</div>
+
+          <label class="mk-fl">
+            <span>Buscar</span>
+            <input type="text" id="mk-q" autocomplete="off">
+          </label>
+
+          <div class="mk-fl mk-poke">
+            <span>IV total</span>
+            <div class="mk-range">
+              <input type="text" id="mk-iv1" placeholder="mín" inputmode="numeric">
+              <i>–</i>
+              <input type="text" id="mk-iv2" placeholder="máx" inputmode="numeric">
+            </div>
+          </div>
+
+          <div class="mk-fl mk-poke">
+            <span>Nível</span>
+            <div class="mk-range">
+              <input type="text" id="mk-lv1" placeholder="mín" inputmode="numeric">
+              <i>–</i>
+              <input type="text" id="mk-lv2" placeholder="máx" inputmode="numeric">
+            </div>
+          </div>
+
+          <label class="mk-fl mk-poke">
+            <span>Qualidade mín (×)</span>
+            <input type="text" id="mk-qmin" placeholder="1.40" inputmode="decimal">
+          </label>
+
+          <div class="mk-fl mk-poke">
+            <span>Raridade</span>
+            <div class="mk-chips" id="mk-chips">
+              ${QUALITY_TIERS.slice()
+                .reverse()
+                .map(([, l]) => {
+                  const c = RARITY_COLOR[l.toLowerCase()] || '#c7cbe0';
+
+                  return `<button type="button" class="mk-chip" data-r="${esc(l)}" style="color:${c};border-color:${c}">${esc(l)}</button>`;
+                })
+                .join('')}
+            </div>
+          </div>
+
+          <label class="mk-chk mk-poke">
+            <input type="checkbox" id="mk-shiny">
+            ✨ Só shiny
+          </label>
+
+          <label class="mk-chk mk-item">
+            <input type="checkbox" id="mk-npc">
+            Abaixo do NPC
+          </label>
+
+          <label class="mk-fl">
+            <span>Moeda</span>
+            <select id="mk-cur">
+              <option value="">Todas moedas</option>
+              <option value="GOLD">$ Dólares</option>
+              <option value="DIAMONDS">💎 Diamantes</option>
+            </select>
+          </label>
+
+          <label class="mk-fl" id="mk-pg-wrap">
+            <span>Preço máx ($ Dólares)</span>
+            <input type="text" id="mk-pmax-g" placeholder="sem limite" inputmode="numeric">
+          </label>
+
+          <label class="mk-fl" id="mk-pd-wrap">
+            <span>Preço máx (💎 Diamantes)</span>
+            <input type="text" id="mk-pmax-d" placeholder="sem limite" inputmode="numeric">
+          </label>
+
+          <button type="button" id="mk-clear">Limpar filtros</button>
+        </aside>
+
+        <section class="mk-res">
+          <div class="mk-table-wrap">
+            <table>
+              <thead id="mk-thead"></thead>
+              <tbody id="mk-tbody"></tbody>
+            </table>
+          </div>
+
+          <div class="mk-foot">
+            <span id="mk-count"></span>
+            <span style="flex:1"></span>
+            <button type="button" id="mk-more">Carregar mais</button>
+          </div>
+        </section>
+      </div>
+
+      <div id="mk-sell" class="mk-sellv">
+        <div class="mk-sec sl-anun">
+          <div class="mk-sec-h">Anunciar</div>
+
+          <div class="mk-form">
+            <div class="mk-seg" id="sl-kinds">
+              <button type="button" class="on" data-kind="item">Itens</button>
+              <button type="button" data-kind="pokemon">Pokémon</button>
+            </div>
+
+            <input type="text" id="sl-filter" placeholder="Filtrar por nome…" autocomplete="off">
+
+            <div class="mk-seg" id="sl-views">
+              <button type="button" data-view="grid" title="Grade">▦</button>
+              <button type="button" data-view="list" title="Lista">☰</button>
+            </div>
+
+            <span id="sl-hint" class="mk-dim"></span>
+          </div>
+
+          <div class="mk-form sl-pf" id="sl-pf" hidden>
+            <span class="mk-f">
+              IV
+              <input type="text" id="sl-iv1" placeholder="mín" inputmode="numeric">
+              –
+              <input type="text" id="sl-iv2" placeholder="máx" inputmode="numeric">
+            </span>
+
+            <span class="mk-f">
+              Nv
+              <input type="text" id="sl-lv1" placeholder="mín" inputmode="numeric">
+              –
+              <input type="text" id="sl-lv2" placeholder="máx" inputmode="numeric">
+            </span>
+
+            <span class="mk-f">
+              × ≥
+              <input type="text" id="sl-qmin" placeholder="1.40" inputmode="decimal">
+            </span>
+
+            <label class="mk-chk">
+              <input type="checkbox" id="sl-shiny">
+              ✨ Shiny
+            </label>
+
+            <span class="mk-f">
+              Ordenar
+              <select id="sl-sort">
+                <option value="name">Nome</option>
+                <option value="lvl">Nível ↓</option>
+                <option value="iv">IV ↓</option>
+                <option value="q">Qualidade ↓</option>
+              </select>
+            </span>
+
+            <div class="mk-chips" id="sl-rar">
+              ${QUALITY_TIERS.slice()
+                .reverse()
+                .map(([, l]) => {
+                  const c = RARITY_COLOR[l.toLowerCase()] || '#c7cbe0';
+
+                  return `<button type="button" class="mk-chip" data-r="${esc(l)}" style="color:${c};border-color:${c}">${esc(l)}</button>`;
+                })
+                .join('')}
+            </div>
+          </div>
+
+          <div class="sl-grid" id="sl-grid"></div>
+
+        </div>
+
+        <div class="mk-sec sl-minesec">
+          <div class="mk-sec-h mk-coll" id="sl-mine-h">
+            <span id="sl-mine-caret">▾</span>
+            Meus anúncios
+            <span id="sl-mine-n" class="mk-dim"></span>
+          </div>
+
+          <div id="sl-mine-wrap">
+            <table>
+              <tbody id="sl-mine"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div id="mk-hist" class="mk-histv">
+        <div class="hist-cols">
+          <div class="mk-sec">
+            <div class="mk-sec-h">Compras <span id="hs-buy-n" class="mk-dim"></span></div>
+
+            <table>
+              <tbody id="hs-buy"></tbody>
+            </table>
+          </div>
+
+          <div class="mk-sec">
+            <div class="mk-sec-h">Vendas <span id="hs-sell-n" class="mk-dim"></span></div>
+
+            <table>
+              <tbody id="hs-sell"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -3941,6 +4507,7 @@
   })();
 
   new ResizeObserver(positionDetails).observe($('mtal-panel'));
+  new ResizeObserver(positionDetails).observe($('mtal-mk'));
   window.addEventListener('resize', positionDetails);
 
   /* ---------- ativar/desativar ---------- */
@@ -4620,6 +5187,1188 @@
         );
       }
     );
+
+  /* ---------- MERCADO ---------- */
+  const mk = {
+    cat: 'all',
+    rows: [],
+    page: 1,
+    done: false,
+    loading: false,
+    req: 0,
+    key: '',
+    err: '',
+    sort: { k: null, dir: -1 },
+    rar: new Set(),
+    mode: 'buy'
+  };
+
+  const mkNum = (id, int) => {
+    let s = String($(id).value || '').trim();
+
+    if (!s) return null;
+
+    s = int
+      ? s.replace(/[.\s]/g, '').replace(',', '.')
+      : s.replace(',', '.');
+
+    const v = parseFloat(s);
+
+    return Number.isFinite(v) && v >= 0 ? v : null;
+  };
+
+  const qNum = (id) => {
+    const s = String($(id).value || '').trim().replace(',', '.');
+
+    if (!s) return null;
+
+    const v = /^\d{2,}$/.test(s) ? Number(s) / Math.pow(10, s.length - 1) : parseFloat(s);
+
+    return Number.isFinite(v) && v >= 0 ? v : null;
+  };
+
+  const qFormat = (e) => {
+    const el = e.target;
+
+    if (!el || !['sl-qmin', 'mk-qmin'].includes(el.id)) return;
+
+    const v = String(el.value).trim();
+
+    if (/^\d{2,}$/.test(v)) el.value = v[0] + '.' + v.slice(1);
+  };
+
+  document.addEventListener('input', qFormat, true);
+
+  const levelOf = (l) => {
+    const v = pick(l, ['level', 'lvl', 'nivel']);
+
+    if (v != null) return Number(v);
+
+    const m = /Lv\.?\s*(\d+)/i.exec(l.name || '');
+
+    return m ? +m[1] : null;
+  };
+
+  const rarityOf = (h) =>
+    pick(h.raw || {}, ['rarity', 'raridade', 'tier', 'rarityName', 'rarityTier', 'grade', 'rank']) ||
+    qualityTier(h.quality);
+
+  const typesOf = (r) => {
+    const t =
+      r.types ||
+      r.tipos ||
+      r.elementTypes ||
+      r.elements ||
+      [r.type1 || r.tipo1, r.type2 || r.tipo2].filter(Boolean);
+
+    return (Array.isArray(t) ? t : [t])
+      .map((x) => (x && typeof x === 'object' ? x.name || x.label || x.type : x))
+      .filter(Boolean);
+  };
+
+  function mkFilters() {
+    const text = $('mk-q').value.trim();
+    const sp = mk.cat === 'pokemon' && text ? resolveSpecies(text) : null;
+
+    return {
+      text: text.toLowerCase(),
+      speciesId: sp ? sp.speciesId : null,
+      ivMin: mkNum('mk-iv1', true),
+      ivMax: mkNum('mk-iv2', true),
+      lvMin: mkNum('mk-lv1', true),
+      lvMax: mkNum('mk-lv2', true),
+      qMin: qNum('mk-qmin'),
+      shiny: $('mk-shiny').checked,
+      npc: $('mk-npc').checked,
+      cur: $('mk-cur').value,
+      pmaxG: mkNum('mk-pmax-g', true),
+      pmaxD: mkNum('mk-pmax-d', true)
+    };
+  }
+
+  const mkServerKey = (f) =>
+    [mk.cat, f.speciesId, f.ivMin, f.qMin].join('|');
+
+  function mkHit(l) {
+    const poke = l.kind === 'pokemon' || mk.cat === 'pokemon';
+    const id = l.id || (Array.isArray(l.ids) && l.ids[0]) || null;
+
+    return {
+      hid: ++hitSeq,
+      t: Date.now(),
+      alert: 'Mercado',
+      id,
+      kind: poke ? 'pokemon' : 'items',
+      category: poke ? null : l.category || mk.cat,
+      name: l.name,
+      price: l.price,
+      currency: l.currency,
+      offerOnly: !!l.offerOnly,
+      shiny: !!l.shiny,
+      ivTotal: l.ivTotal,
+      quality: l.quality,
+      quantity: l.quantity,
+      belowNpc: !!l.belowNpc,
+      lvl: levelOf(l),
+      raw: l,
+      buyable: !l.offerOnly && !!id
+    };
+  }
+
+  async function mkLoad(reset) {
+    const f = mkFilters();
+
+    if (reset) {
+      mk.rows = [];
+      mk.page = 1;
+      mk.done = false;
+      mk.key = mkServerKey(f);
+    } else if (mk.loading || mk.done) {
+      return;
+    }
+
+    const req = ++mk.req;
+    const cat = mk.cat;
+
+    mk.loading = true;
+    mk.err = '';
+    mkRender();
+
+    try {
+      let list;
+
+      if (cat === 'all') {
+        const qs = CATEGORIES.map((c) => '?category=' + encodeURIComponent(c)).concat([
+          '?browse=pokemon&page=1&sort=recent'
+        ]);
+
+        const res = await Promise.all(qs.map((q) => api(q).catch(() => null)));
+
+        if (req !== mk.req) return;
+
+        list = res.flatMap((d) => (d && d.listings) || []);
+      } else {
+        let q;
+
+        if (cat === 'pokemon') {
+          q = '?browse=pokemon&page=' + mk.page + '&sort=recent';
+
+          if (f.speciesId) q += '&speciesId=' + f.speciesId;
+          if (f.ivMin) q += '&ivMin=' + f.ivMin;
+          if (f.qMin) q += '&qMin=' + f.qMin;
+        } else {
+          q = '?category=' + encodeURIComponent(cat);
+        }
+
+        const data = await api(q);
+
+        if (req !== mk.req) return;
+
+        list = (data && data.listings) || [];
+      }
+
+      rememberListings(list);
+
+      const seen = new Set(mk.rows.map((h) => h.id));
+      let added = 0;
+
+      list.forEach((l) => {
+        if (l.currency) knownCurrencies.add(l.currency);
+
+        const h = mkHit(l);
+
+        if (h.id != null && seen.has(h.id)) return;
+
+        seen.add(h.id);
+        mk.rows.push(h);
+        added++;
+      });
+
+      if (cat !== 'pokemon' || !added) {
+        mk.done = true;
+      } else {
+        mk.page++;
+      }
+    } catch (e) {
+      if (req === mk.req) mk.err = String((e && e.message) || e);
+    } finally {
+      if (req === mk.req) {
+        mk.loading = false;
+        mkRender();
+      }
+    }
+  }
+
+  function mkVisible() {
+    const f = mkFilters();
+
+    const out = mk.rows.filter((h) => {
+      if (f.text && !f.speciesId && !String(h.name || '').toLowerCase().includes(f.text)) return false;
+
+      if (h.kind === 'pokemon') {
+        if (f.ivMin != null && !(h.ivTotal >= f.ivMin)) return false;
+        if (f.ivMax != null && !(h.ivTotal <= f.ivMax)) return false;
+        if (f.lvMin != null && !(h.lvl >= f.lvMin)) return false;
+        if (f.lvMax != null && !(h.lvl <= f.lvMax)) return false;
+        if (f.qMin != null && !(h.quality >= f.qMin)) return false;
+        if (f.shiny && !h.shiny) return false;
+        if (mk.rar.size && !mk.rar.has(rarityOf(h))) return false;
+      } else if (f.npc && !h.belowNpc) {
+        return false;
+      }
+
+      if (f.cur && h.currency !== f.cur) return false;
+      const lim = h.currency === 'DIAMONDS' ? f.pmaxD : h.currency === 'GOLD' ? f.pmaxG : null;
+
+      if ((f.pmaxG != null || f.pmaxD != null) && h.offerOnly) return false;
+      if (lim != null && !(h.price <= lim)) return false;
+
+      return true;
+    });
+
+    const k = mk.sort.k;
+
+    if (k) {
+      const val = {
+        price: (h) => (h.offerOnly ? Number.MAX_VALUE : h.price),
+        iv: (h) => h.ivTotal,
+        lvl: (h) => h.lvl,
+        q: (h) => h.quality,
+        qty: (h) => h.quantity
+      }[k];
+
+      out.sort((a, b) => {
+        if (k === 'price' && a.currency !== b.currency) {
+          return String(a.currency).localeCompare(String(b.currency));
+        }
+
+        const va = val(a) == null ? -Number.MAX_VALUE : val(a);
+        const vb = val(b) == null ? -Number.MAX_VALUE : val(b);
+
+        return (va - vb) * mk.sort.dir;
+      });
+    }
+
+    return out;
+  }
+
+  function mkRender() {
+    const poke = mk.cat === 'pokemon';
+
+    document.querySelectorAll('#mtal-mk .mk-cat').forEach((b) =>
+      b.classList.toggle('active', b.dataset.cat === mk.cat)
+    );
+    document.querySelectorAll('#mtal-mk .mk-poke').forEach((el) => (el.hidden = !poke));
+    document.querySelectorAll('#mtal-mk .mk-item').forEach((el) => (el.hidden = poke || mk.cat === 'all'));
+
+    $('mk-q').placeholder = poke ? 'Espécie ou nome…' : 'Nome do item…';
+
+    if (poke) {
+      $('mk-q').setAttribute('list', 'mtal-species');
+    } else {
+      $('mk-q').removeAttribute('list');
+    }
+
+    const curSel = $('mk-cur').value;
+
+    $('mk-pg-wrap').hidden = curSel === 'DIAMONDS';
+    $('mk-pd-wrap').hidden = curSel === 'GOLD';
+
+    const th = (label, k, cls) =>
+      `<th class="${cls || ''}${k ? ' mk-sortable' : ''}${k && mk.sort.k === k ? ' on' : ''}"${k ? ` data-sort="${k}"` : ''}>${label}${
+        k && mk.sort.k === k ? (mk.sort.dir > 0 ? ' ▲' : ' ▼') : ''
+      }</th>`;
+
+    $('mk-thead').innerHTML =
+      '<tr>' +
+      (poke
+        ? th('') + th('Pokémon') + th('Nv', 'lvl') + th('IV', 'iv') + th('Raridade', 'q') + th('Tipos') + th('Preço', 'price', 'r') + th('')
+        : mk.cat === 'all'
+          ? th('') + th('Anúncio') + th('Categoria') + th('Qtd', 'qty') + th('Preço', 'price', 'r') + th('')
+          : th('') + th('Item') + th('Qtd', 'qty') + th('Preço/un', 'price', 'r') + th('')) +
+      '</tr>';
+
+    const rows = mkVisible();
+
+    $('mk-tbody').innerHTML =
+      rows
+        .map((h) => {
+          const img = `<td class="mk-img"><div class="mtal-hit-thumb mk-thumb" data-hid="${h.hid}">${thumbHtml(h)}</div></td>`;
+          const price = `<td class="mk-price">${esc(hitPrice(h))}</td>`;
+          const acts = `<td class="mk-acts">
+            <button type="button" class="mk-view" data-hid="${h.hid}" title="Detalhes">${EYE_SVG}</button>
+            <button type="button" class="mk-mkt" data-hid="${h.hid}" title="Abrir no Market">⚖️</button>
+            ${h.buyable ? `<button type="button" class="mk-buy" data-hid="${h.hid}" title="Comprar">🛒</button>` : ''}
+          </td>`;
+
+          if (mk.cat === 'all') {
+            let sub = '';
+
+            if (h.kind === 'pokemon') {
+              const rar = rarityOf(h);
+              const rc = (rar && RARITY_COLOR[String(rar).toLowerCase()]) || '#e0b95a';
+
+              sub =
+                `<div class="mk-dim">IV <b style="color:#f2ead0">${esc(h.ivTotal)}</b>/192` +
+                (rar ? ` · <span style="color:${rc}">${esc(rar)} ×${Number(h.quality).toFixed(2)}</span>` : '') +
+                `</div>`;
+            }
+
+            return `<tr class="mtal-mkrow" data-hid="${h.hid}">${img}
+              <td><div class="mk-name">${esc(h.name || '-')}${h.shiny ? ' ✨' : ''}</div>${sub}</td>
+              <td>${esc(h.kind === 'pokemon' ? 'Pokémon' : catLabel(h.category) || 'Item')}</td>
+              <td>${h.quantity != null ? fmt(h.quantity) : '-'}</td>
+              ${price}${acts}</tr>`;
+          }
+
+          if (h.kind === 'pokemon') {
+            const rar = rarityOf(h);
+            const rc = (rar && RARITY_COLOR[String(rar).toLowerCase()]) || '#e0b95a';
+            const iv = Number(h.ivTotal) || 0;
+            const types = typesOf(h.raw || {})
+              .map((t) => `<span style="color:${TYPE_COLOR[String(t).toLowerCase()] || '#c7cbe0'}">${esc(cap(t))}</span>`)
+              .join(' / ');
+
+            return `<tr class="mtal-mkrow" data-hid="${h.hid}">${img}
+              <td class="mk-name">${esc(stripLv(h.name))}${h.shiny ? ' ✨' : ''}</td>
+              <td>${h.lvl != null ? esc(h.lvl) : '-'}</td>
+              <td class="mk-iv"><b>${esc(iv)}</b><span>/192</span><i><em style="width:${Math.min(100, (iv / 192) * 100)}%"></em></i></td>
+              <td style="color:${rc}">${esc(rar || '-')}${h.quality != null ? ' ×' + Number(h.quality).toFixed(2) : ''}</td>
+              <td>${types || '-'}</td>
+              ${price}${acts}</tr>`;
+          }
+
+          return `<tr class="mtal-mkrow" data-hid="${h.hid}">${img}
+            <td class="mk-name">${esc(h.name || '-')}</td>
+            <td>${h.quantity != null ? fmt(h.quantity) : '-'}</td>
+            ${price}${acts}</tr>`;
+        })
+        .join('') ||
+      `<tr><td colspan="8" class="mk-empty">${
+        mk.loading ? 'Carregando…' : mk.err ? '⚠ ' + esc(mk.err) : 'Nenhum anúncio com esses filtros.'
+      }</td></tr>`;
+
+    rows.forEach(ensureSprite);
+
+    $('mk-count').textContent =
+      rows.length + ' de ' + mk.rows.length + ' carregados' + (mk.loading && mk.rows.length ? ' · carregando…' : '');
+
+    $('mk-more').hidden = !poke || mk.done;
+    $('mk-more').disabled = mk.loading;
+  }
+
+  function mkOpen() {
+    $('mtal-mk').style.display = 'flex';
+
+    if (!species) loadSpecies();
+
+    if (!mk.rows.length && !mk.loading) {
+      mkLoad(true);
+    } else {
+      mkRender();
+    }
+  }
+
+  function mkClose() {
+    $('mtal-mk').style.display = 'none';
+
+    if (detailsAnchor === 'mtal-mk') hideDetails();
+  }
+
+  $('mtal-mkopen').addEventListener('click', mkOpen);
+  $('mk-close').addEventListener('click', mkClose);
+  $('mk-refresh').addEventListener('click', () => (mk.mode === 'buy' ? mkLoad(true) : slLoad()));
+  $('mk-more').addEventListener('click', () => mkLoad(false));
+
+  document.querySelectorAll('#mtal-mk .mk-cat').forEach((b) =>
+    b.addEventListener('click', () => {
+      if (mk.cat === b.dataset.cat) return;
+
+      mk.cat = b.dataset.cat;
+      mk.sort = { k: null, dir: -1 };
+      $('mk-q').value = '';
+      mkLoad(true);
+    })
+  );
+
+  $('mk-chips').addEventListener('click', (e) => {
+    const c = e.target.closest('.mk-chip');
+
+    if (!c) return;
+
+    const r = c.dataset.r;
+
+    if (mk.rar.has(r)) {
+      mk.rar.delete(r);
+    } else {
+      mk.rar.add(r);
+    }
+
+    c.classList.toggle('on', mk.rar.has(r));
+    mkRender();
+  });
+
+  let mkTimer = null;
+
+  const mkOnFilter = () => {
+    clearTimeout(mkTimer);
+
+    mkTimer = setTimeout(() => {
+      if (mkServerKey(mkFilters()) !== mk.key) {
+        mkLoad(true);
+      } else {
+        mkRender();
+      }
+    }, 350);
+  };
+
+  $('mk-filters').addEventListener('input', mkOnFilter);
+  $('mk-filters').addEventListener('change', mkOnFilter);
+
+  $('mk-clear').addEventListener('click', () => {
+    $('mk-filters').querySelectorAll('input').forEach((i) => {
+      if (i.type === 'checkbox') {
+        i.checked = false;
+      } else {
+        i.value = '';
+      }
+    });
+
+    $('mk-cur').value = '';
+    mk.rar.clear();
+    document.querySelectorAll('#mtal-mk .mk-chip').forEach((c) => c.classList.remove('on'));
+    mkOnFilter();
+  });
+
+  $('mk-thead').addEventListener('click', (e) => {
+    const t = e.target.closest('[data-sort]');
+
+    if (!t) return;
+
+    const k = t.dataset.sort;
+
+    mk.sort =
+      mk.sort.k === k
+        ? { k, dir: -mk.sort.dir }
+        : { k, dir: k === 'price' ? 1 : -1 };
+
+    mkRender();
+  });
+
+  $('mk-tbody').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-hid]');
+    const tr = e.target.closest('tr[data-hid]');
+
+    if (!b && !tr) return;
+
+    const h = mk.rows.find((x) => x.hid === +(b || tr).dataset.hid);
+
+    if (!h) return;
+
+    document.querySelectorAll('#mk-tbody tr[data-hid]').forEach((r) => r.classList.toggle('on', r === tr));
+
+    if (!b) {
+      showDetails(h, 'mtal-mk');
+    } else if (b.classList.contains('mk-buy')) {
+      handleBuyClick(h.hid, b);
+    } else if (b.classList.contains('mk-mkt')) {
+      mkClose();
+      tryNavigateToListing(h);
+    } else {
+      showDetails(h, 'mtal-mk');
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $('mtal-mk').style.display === 'flex') mkClose();
+  });
+
+  /* ---------- VENDAS / HISTÓRICO ---------- */
+  const sl = {
+    mine: [],
+    hits: [],
+    history: [],
+    catalog: null,
+    owned: null,
+    pokes: [],
+    kind: 'item',
+    sel: null,
+    view: store.get('slView', 'grid'),
+    lastCur: 'GOLD',
+    rar: new Set(),
+    loading: false,
+    loaded: false,
+    err: ''
+  };
+
+  let slDex = null;
+
+  function slDexMap() {
+    if (slDex && slDex.size) return slDex;
+
+    const f = findGameFiber();
+
+    if (!f) return new Map();
+
+    const arr = hookNodes(f)
+      .map((h) => (h.queue ? h.queue.lastRenderedState : h.memoizedState))
+      .find((v) => Array.isArray(v) && v[0] && typeof v[0] === 'object' && 'pokeId' in v[0] && 'baseHp' in v[0]);
+
+    slDex = new Map((arr || []).map((d) => [d.pokeId, d]));
+
+    return slDex;
+  }
+
+  const sumObj = (o) =>
+    o && typeof o === 'object'
+      ? Object.values(o).reduce((a, v) => a + (Number(v) || 0), 0)
+      : null;
+
+  function slHit(l) {
+    return {
+      hid: ++hitSeq,
+      t: Date.now(),
+      alert: 'Meus anúncios',
+      id: l.id,
+      kind: l.kind === 'pokemon' ? 'pokemon' : 'items',
+      category: l.kind === 'pokemon' ? null : l.category,
+      name: l.name,
+      price: l.price,
+      currency: l.currency,
+      offerOnly: !!l.offerOnly,
+      shiny: !!l.shiny,
+      ivTotal: l.ivTotal,
+      quality: l.quality,
+      quantity: l.quantity,
+      belowNpc: false,
+      lvl: levelOf(l),
+      raw: l,
+      buyable: false
+    };
+  }
+
+  function slOwnedItems() {
+    if (!ownedCache || !sl.catalog) return null;
+
+    const byId = new Map(sl.catalog.filter((c) => c.kind === 'item').map((c) => [c.refId, c]));
+
+    return ownedCache.list
+      .filter((x) => x.quantity > 0 && byId.has(x.itemId))
+      .map((x) => {
+        const c = byId.get(x.itemId);
+
+        return { ...c, owned: x.quantity, title: c.label };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  function slMyPokes() {
+    const f = findGameFiber();
+
+    if (!f) return [];
+
+    const arr = hookNodes(f)
+      .map((h) => (h.queue ? h.queue.lastRenderedState : h.memoizedState))
+      .find(
+        (v) =>
+          Array.isArray(v) &&
+          v[0] &&
+          typeof v[0] === 'object' &&
+          'id' in v[0] &&
+          'speciesId' in v[0] &&
+          'team' in v[0]
+      );
+
+    const dex = slDexMap();
+
+    return (arr || [])
+      .filter((p) => !p.team)
+      .map((p) => {
+        const d = dex.get(p.speciesId) || {};
+        const iv = p.ivTotal != null ? p.ivTotal : sumObj(p.growth) != null ? sumObj(p.growth) : sumObj(p.ivs);
+
+        return {
+          ...p,
+          _iv: iv,
+          _q: p.quality != null ? Number(p.quality) : null,
+          _types: [p.type1 || d.type1, p.type2 || d.type2].filter(Boolean)
+        };
+      });
+  }
+
+  function slPokeFilter(list) {
+    const n = (id, int) => mkNum(id, int);
+    const iv1 = n('sl-iv1', true);
+    const iv2 = n('sl-iv2', true);
+    const lv1 = n('sl-lv1', true);
+    const lv2 = n('sl-lv2', true);
+    const qm = qNum('sl-qmin');
+    const shiny = $('sl-shiny').checked;
+
+    const out = list.filter((p) => {
+      if (iv1 != null && !(p._iv >= iv1)) return false;
+      if (iv2 != null && !(p._iv <= iv2)) return false;
+      if (lv1 != null && !(p.level >= lv1)) return false;
+      if (lv2 != null && !(p.level <= lv2)) return false;
+      if (qm != null && !(p._q >= qm)) return false;
+      if (shiny && !p.shiny) return false;
+      if (sl.rar.size && !sl.rar.has(qualityTier(p._q))) return false;
+
+      return true;
+    });
+
+    const by = $('sl-sort').value;
+    const num = (v) => (v == null ? -1 : v);
+
+    return out.sort((a, b) =>
+      by === 'lvl'
+        ? b.level - a.level
+        : by === 'iv'
+          ? num(b._iv) - num(a._iv)
+          : by === 'q'
+            ? num(b._q) - num(a._q)
+            : String(a.name).localeCompare(String(b.name)) || b.level - a.level
+    );
+  }
+
+  function slInvHit(p) {
+    return {
+      hid: ++hitSeq,
+      t: Date.now(),
+      alert: 'Inventário',
+      inventory: true,
+      kind: 'pokemon',
+      name: p.name + ' Lv.' + p.level,
+      price: p.sellValue || 0,
+      currency: 'GOLD',
+      offerOnly: false,
+      shiny: !!p.shiny,
+      ivTotal: p._iv,
+      quality: p._q,
+      raw: { ...p, stats: p.stats || p.growth, type1: p._types[0], type2: p._types[1] },
+      buyable: false
+    };
+  }
+
+  const slKey = (c) => (sl.kind === 'pokemon' ? String(c.id) : String(c.refId));
+
+  const slList = () => (sl.kind === 'pokemon' ? sl.pokes : sl.owned || []);
+
+  const slSelected = () => (sl.sel ? slList().find((c) => slKey(c) === sl.sel) || null : null);
+
+  function slInvItemHit(c) {
+    return {
+      hid: ++hitSeq,
+      t: Date.now(),
+      alert: 'Inventário',
+      inventory: true,
+      invRef: c,
+      kind: 'items',
+      category: c.category,
+      name: c.title,
+      quantity: c.owned,
+      price: 0,
+      currency: 'GOLD',
+      offerOnly: false,
+      raw: { icon: c.icon, refId: c.refId, name: c.name },
+      buyable: false
+    };
+  }
+
+  async function slSell(c, kind, price, cur, qty, btn) {
+    if (!c) return;
+    if (!(price > 0)) return toast('Preço inválido.');
+
+    let body;
+    let msg;
+
+    if (kind === 'pokemon') {
+      msg = c.name + ' Lv.' + c.level + (c.shiny ? ' ✨' : '');
+
+      if (!confirm('Anunciar ' + msg + ' por ' + fmt(price) + ' ' + curLabel(cur) + '?')) return;
+
+      body = { action: 'sell-pokemon', capturedId: c.id, price, currency: cur };
+    } else {
+      if (!(qty >= 1)) return toast('Quantidade inválida.');
+      if (qty > c.owned) return toast('Você só tem ' + fmt(c.owned) + '× ' + c.name + '.');
+
+      msg = qty + '× ' + c.name;
+
+      if (!confirm('Anunciar ' + msg + ' por ' + fmt(price) + ' ' + curLabel(cur) + '/un?')) return;
+
+      body = { action: 'sell', kind: c.kind, refId: c.refId, quantity: qty, price, currency: cur };
+    }
+
+    if (btn) btn.disabled = true;
+
+    try {
+      await mkAction(body);
+
+      toast('Anunciado: ' + msg);
+
+      if (body.action === 'sell') {
+        const own = ownedCache && ownedCache.list.find((x) => x.itemId === c.refId);
+
+        if (own) {
+          own.quantity -= body.quantity;
+          store.set('ownedItems', ownedCache);
+        }
+      }
+
+      sl.sel = null;
+      sl.lastCur = cur;
+
+      if (detailsAnchor === 'mtal-mk') hideDetails();
+    } catch (e) {
+      toast('Erro ao anunciar: ' + ((e && e.message) || e));
+    }
+
+    if (btn) btn.disabled = false;
+
+    slLoad();
+
+    if (body.action === 'sell-pokemon') setTimeout(slRenderOwned, 1500);
+  }
+
+  function slRenderOwned() {
+    const grid = $('sl-grid');
+
+    if (!grid) return;
+
+    const poke = sl.kind === 'pokemon';
+
+    if (poke) {
+      sl.pokes = slMyPokes();
+    } else {
+      sl.owned = slOwnedItems();
+    }
+
+    $('sl-pf').hidden = !poke;
+
+    document.querySelectorAll('#sl-views button').forEach((b) =>
+      b.classList.toggle('on', b.dataset.view === sl.view)
+    );
+
+    const q = ($('sl-filter').value || '').trim().toLowerCase();
+    let cards = slList().filter((c) => !q || String(c.name).toLowerCase().includes(q));
+
+    if (poke) cards = slPokeFilter(cards);
+
+    const pseudo = [];
+    const list = sl.view === 'list';
+
+    const thumb = (c) => {
+      const h = poke
+        ? { hid: ++hitSeq, kind: 'pokemon', name: c.name, raw: {} }
+        : { hid: ++hitSeq, kind: 'items', name: c.name, raw: { icon: c.icon } };
+
+      pseudo.push(h);
+
+      return `<div class="mtal-hit-thumb ${list ? 'mk-thumb' : 'sl-thumb'}" data-hid="${h.hid}">${thumbHtml(h)}</div>`;
+    };
+
+    const rarCell = (c) => {
+      const r = qualityTier(c._q);
+      const rc = (r && RARITY_COLOR[String(r).toLowerCase()]) || '#9aa0b8';
+
+      return r ? `<span style="color:${rc}">${esc(r)} ×${Number(c._q).toFixed(2)}</span>` : '-';
+    };
+
+    const types = (c) =>
+      c._types
+        .map((t) => `<span style="color:${TYPE_COLOR[String(t).toLowerCase()] || '#c7cbe0'}">${esc(cap(t))}</span>`)
+        .join(' / ') || '-';
+
+    grid.classList.toggle('list', list);
+
+    let html;
+
+    if (!cards.length) {
+      html = `<div class="mk-empty">${
+        poke
+          ? sl.pokes.length
+            ? 'Nenhum Pokémon com esses filtros.'
+            : 'Nenhum Pokémon fora do time.'
+          : !ownedCache
+            ? 'Abra o Market do jogo 1x para eu ler seu inventário.'
+            : !sl.catalog
+              ? 'Carregando…'
+              : 'Nenhum item vendável.'
+      }</div>`;
+    } else if (list) {
+      html =
+        `<table class="sl-table"><thead><tr>` +
+        (poke
+          ? '<th></th><th>Pokémon</th><th>Nv</th><th>IV</th><th>Raridade</th><th>Tipos</th><th class="r">NPC</th>'
+          : '<th></th><th>Item</th><th>Qtd</th>') +
+        `</tr></thead><tbody>` +
+        cards
+          .map((c) => {
+            const key = slKey(c);
+            const on = key === sl.sel ? ' on' : '';
+
+            return poke
+              ? `<tr class="sl-row${on}" data-key="${esc(key)}">
+                  <td class="mk-img">${thumb(c)}</td>
+                  <td class="mk-name">${esc(c.name)}${c.shiny ? ' ✨' : ''}</td>
+                  <td>${esc(c.level)}</td>
+                  <td>${c._iv != null ? `<b style="color:#f2ead0">${esc(c._iv)}</b><span class="mk-dim">/192</span>` : '-'}</td>
+                  <td>${rarCell(c)}</td>
+                  <td>${types(c)}</td>
+                  <td class="mk-price">${c.sellValue != null ? '$ ' + fmt(c.sellValue) : '-'}</td>
+                </tr>`
+              : `<tr class="sl-row${on}" data-key="${esc(key)}">
+                  <td class="mk-img">${thumb(c)}</td>
+                  <td class="mk-name">${esc(c.title)}</td>
+                  <td>${fmt(c.owned)}×</td>
+                </tr>`;
+          })
+          .join('') +
+        `</tbody></table>`;
+    } else {
+      html = cards
+        .map((c) => {
+          const key = slKey(c);
+          const sub = poke
+            ? 'Lv.' + esc(c.level) + (c._iv != null ? ` · IV <b style="color:#f2ead0">${esc(c._iv)}</b>/192` : '')
+            : fmt(c.owned) + '×';
+
+          return `<button type="button" class="sl-card${key === sl.sel ? ' on' : ''}" data-key="${esc(key)}" title="${esc(poke ? c.name : c.title)}">
+            ${thumb(c)}
+            <div class="sl-cname">${esc(poke ? c.name : c.title)}${c.shiny ? ' ✨' : ''}</div>
+            <div class="mk-dim">${sub}</div>
+            ${poke && c._q != null ? `<div class="mk-dim">${rarCell(c)}</div>` : ''}
+          </button>`;
+        })
+        .join('');
+    }
+
+    grid.innerHTML = html;
+
+    pseudo.forEach(ensureSprite);
+
+    $('sl-hint').textContent = !poke && ownedCache ? 'Inventário lido há ' + ago(ownedCache.t) + '.' : '';
+  }
+
+  function hsPokeData(x) {
+    const known = seenL[seenKey(x.name, x.price, x.currency)];
+
+    if (known) return known;
+
+    if (!x.bought) return null;
+
+    const base = stripLv(x.name).toLowerCase();
+    const lv = levelOf(x);
+    const cand = slMyPokes().filter((p) => String(p.name).toLowerCase() === base && p.level === lv);
+
+    if (cand.length !== 1) return null;
+
+    const p = cand[0];
+
+    return {
+      ...p,
+      ivTotal: p._iv,
+      quality: p._q,
+      stats: p.stats || p.growth,
+      type1: p._types[0],
+      type2: p._types[1]
+    };
+  }
+
+  function hsHit(x) {
+    const cat = (sl.catalog || []).find((c) => c.name === x.name);
+    const poke = !cat && /Lv\.?\s*\d+/i.test(x.name || '');
+    const pd = poke ? hsPokeData(x) : null;
+
+    return {
+      hid: ++hitSeq,
+      t: Date.now(),
+      alert: 'Histórico',
+      purchasedAt: x.at ? Date.parse(x.at) : Date.now(),
+      at: x.at,
+      sold: !x.bought,
+      kind: poke ? 'pokemon' : 'items',
+      category: cat ? cat.category : null,
+      name: x.name,
+      price: x.price,
+      currency: x.currency,
+      offerOnly: false,
+      quantity: poke ? null : x.amount,
+      shiny: !!(pd && pd.shiny),
+      ivTotal: pd ? pd.ivTotal : null,
+      quality: pd ? pd.quality : null,
+      raw: poke
+        ? { ...(pd || {}), level: pd && pd.level != null ? pd.level : levelOf(x) }
+        : { icon: cat ? cat.icon : '' },
+      buyable: false
+    };
+  }
+
+  function hsRender() {
+    const row = (x) => `<tr class="sl-row" data-hi="${sl.history.indexOf(x)}">
+      <td class="mk-dim">${x.at ? esc(new Date(x.at).toLocaleString('pt-BR')) : '-'}</td>
+      <td class="mk-name">${esc(x.name || '-')}</td>
+      <td>${x.amount != null ? fmt(x.amount) + '×' : '-'}</td>
+      <td class="mk-price">${esc(hitPrice({ price: x.price, currency: x.currency }))}${
+        x.offer ? ' <span class="mk-dim">(oferta)</span>' : ''
+      }</td>
+    </tr>`;
+
+    const empty = (t) => `<tr><td colspan="4" class="mk-empty">${sl.loading ? 'Carregando…' : sl.err ? '⚠ ' + esc(sl.err) : t}</td></tr>`;
+
+    const bought = sl.history.filter((x) => x.bought);
+    const sold = sl.history.filter((x) => !x.bought);
+
+    $('hs-buy-n').textContent = '(' + bought.length + ')';
+    $('hs-sell-n').textContent = '(' + sold.length + ')';
+    $('hs-buy').innerHTML = bought.map(row).join('') || empty('Nenhuma compra.');
+    $('hs-sell').innerHTML = sold.map(row).join('') || empty('Nenhuma venda.');
+  }
+
+  function slRender() {
+    slRenderOwned();
+
+    $('sl-mine-n').textContent = '(' + sl.mine.length + ')';
+
+    const mineOpen = store.get('slMineOpen', true) && (sl.mine.length > 0 || sl.loading || !!sl.err);
+
+    $('sl-mine-wrap').hidden = !mineOpen;
+    $('sl-mine-caret').textContent = mineOpen ? '▾' : '▸';
+
+    sl.hits = sl.mine.map(slHit);
+
+    $('sl-mine').innerHTML =
+      sl.hits
+        .map((h) => {
+          let sub = catLabel(h.category) || 'Item';
+
+          if (h.kind === 'pokemon') {
+            const rar = rarityOf(h);
+            const rc = (rar && RARITY_COLOR[String(rar).toLowerCase()]) || '#e0b95a';
+
+            sub =
+              `IV <b style="color:#f2ead0">${esc(h.ivTotal)}</b>/192` +
+              (rar ? ` · <span style="color:${rc}">${esc(rar)} ×${Number(h.quality).toFixed(2)}</span>` : '');
+          }
+
+          return `<tr class="sl-row" data-mh="${h.hid}">
+            <td class="mk-img"><div class="mtal-hit-thumb mk-thumb" data-hid="${h.hid}">${thumbHtml(h)}</div></td>
+            <td><div class="mk-name">${esc(h.name || '-')}${h.shiny ? ' ✨' : ''}</div><div class="mk-dim">${sub}</div></td>
+            <td>${h.quantity != null ? fmt(h.quantity) + '×' : '-'}</td>
+            <td class="mk-price">${esc(hitPrice(h))}${h.kind === 'pokemon' ? '' : ' <span class="mk-dim">/un</span>'}</td>
+            <td class="mk-dim">${h.raw.at ? esc(new Date(h.raw.at).toLocaleString('pt-BR')) : '-'}</td>
+            <td class="mk-acts">
+              <button type="button" data-act="reprice" data-hid="${h.hid}" title="Alterar preço">✎</button>
+              <button type="button" data-act="cancel" data-hid="${h.hid}" title="Cancelar anúncio">✕</button>
+            </td>
+          </tr>`;
+        })
+        .join('') ||
+      `<tr><td colspan="6" class="mk-empty">${
+        sl.loading ? 'Carregando…' : sl.err ? '⚠ ' + esc(sl.err) : 'Nenhum anúncio ativo.'
+      }</td></tr>`;
+
+    sl.hits.forEach(ensureSprite);
+
+    hsRender();
+  }
+
+  async function slLoad() {
+    if (sl.loading) return;
+
+    sl.loading = true;
+    sl.err = '';
+    slRender();
+
+    try {
+      const d = await api('?category=Pokemon');
+
+      sl.mine = (d && d.mine) || [];
+      rememberListings(sl.mine);
+      sl.history = (d && d.history) || [];
+
+      if (!sl.catalog && d && d.catalog) {
+        const all = [...(d.catalog.items || []), ...(d.catalog.balls || [])];
+        const cnt = {};
+
+        all.forEach((c) => (cnt[c.name] = (cnt[c.name] || 0) + 1));
+
+        sl.catalog = all.map((c) => ({
+          ...c,
+          label: cnt[c.name] > 1 ? c.name + ' #' + c.refId : c.name
+        }));
+      }
+
+      sl.loaded = true;
+    } catch (e) {
+      sl.err = String((e && e.message) || e);
+    }
+
+    sl.loading = false;
+    slRender();
+  }
+
+  function mkSetMode(m) {
+    if (mk.mode !== m && detailsAnchor === 'mtal-mk') hideDetails();
+
+    mk.mode = m;
+
+    $('mtal-mk').dataset.mode = m;
+
+    document.querySelectorAll('#mtal-mk .mk-mode').forEach((b) =>
+      b.classList.toggle('active', b.dataset.mode === m)
+    );
+
+    if (m !== 'buy') {
+      if (!sl.loaded && !sl.loading) {
+        slLoad();
+      } else {
+        slRender();
+      }
+    }
+  }
+
+  document.querySelectorAll('#mtal-mk .mk-mode').forEach((b) =>
+    b.addEventListener('click', () => mkSetMode(b.dataset.mode))
+  );
+
+  document.querySelectorAll('#sl-kinds button').forEach((b) =>
+    b.addEventListener('click', () => {
+      sl.kind = b.dataset.kind;
+      sl.sel = null;
+
+      if (detailsAnchor === 'mtal-mk') hideDetails();
+
+      document.querySelectorAll('#sl-kinds button').forEach((x) => x.classList.toggle('on', x === b));
+
+      slRenderOwned();
+    })
+  );
+
+  $('sl-mine-h').addEventListener('click', () => {
+    store.set('slMineOpen', !store.get('slMineOpen', true));
+    slRender();
+  });
+
+  $('sl-filter').addEventListener('input', slRenderOwned);
+  $('sl-pf').addEventListener('input', slRenderOwned);
+  $('sl-pf').addEventListener('change', slRenderOwned);
+
+  $('sl-rar').addEventListener('click', (e) => {
+    const c = e.target.closest('.mk-chip');
+
+    if (!c) return;
+
+    const r = c.dataset.r;
+
+    if (sl.rar.has(r)) {
+      sl.rar.delete(r);
+    } else {
+      sl.rar.add(r);
+    }
+
+    c.classList.toggle('on', sl.rar.has(r));
+    slRenderOwned();
+  });
+
+  document.querySelectorAll('#sl-views button').forEach((b) =>
+    b.addEventListener('click', () => {
+      sl.view = b.dataset.view;
+      store.set('slView', sl.view);
+      slRenderOwned();
+    })
+  );
+
+  $('sl-grid').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-key]');
+
+    if (!b) return;
+
+    sl.sel = b.dataset.key;
+
+    document.querySelectorAll('#sl-grid [data-key]').forEach((x) => x.classList.toggle('on', x === b));
+
+    const c = slSelected();
+
+    if (c) showDetails(sl.kind === 'pokemon' ? { ...slInvHit(c), invRef: c } : slInvItemHit(c), 'mtal-mk');
+  });
+
+  const hsClick = (e) => {
+    const tr = e.target.closest('tr[data-hi]');
+
+    if (!tr) return;
+
+    const x = sl.history[+tr.dataset.hi];
+
+    if (!x) return;
+
+    document.querySelectorAll('#mk-hist tr[data-hi]').forEach((r) => r.classList.toggle('on', r === tr));
+    showDetails(hsHit(x), 'mtal-mk');
+  };
+
+  $('hs-buy').addEventListener('click', hsClick);
+  $('hs-sell').addEventListener('click', hsClick);
+
+  $('sl-mine').addEventListener('click', async (e) => {
+    const b = e.target.closest('button[data-hid]');
+
+    if (!b) {
+      const tr = e.target.closest('tr[data-mh]');
+      const hm = tr && sl.hits.find((x) => x.hid === +tr.dataset.mh);
+
+      if (hm) {
+        document.querySelectorAll('#sl-mine tr[data-mh]').forEach((r) => r.classList.toggle('on', r === tr));
+        showDetails(hm, 'mtal-mk');
+      }
+
+      return;
+    }
+
+    const h = sl.hits.find((x) => x.hid === +b.dataset.hid);
+
+    if (!h) return;
+
+    const l = h.raw;
+
+    try {
+      if (b.dataset.act === 'cancel') {
+        if (!confirm('Cancelar o anúncio de ' + h.name + '?')) return;
+
+        b.disabled = true;
+
+        await mkAction({ action: 'cancel', id: l.id });
+
+        toast('Anúncio cancelado: ' + h.name);
+      } else {
+        const v = prompt(
+          'Novo preço de ' + h.name + ' (' + curLabel(l.currency) + (h.kind === 'pokemon' ? '' : '/un') + ')',
+          String(l.price)
+        );
+
+        if (v == null) return;
+
+        const p = parseFloat(String(v).replace(/[.\s]/g, '').replace(',', '.'));
+
+        if (!(p > 0)) return toast('Preço inválido.');
+
+        b.disabled = true;
+
+        await mkAction({ action: 'cancel', id: l.id });
+
+        await mkAction(
+          h.kind === 'pokemon'
+            ? { action: 'sell-pokemon', capturedId: l.capturedId, price: p, currency: l.currency }
+            : { action: 'sell', kind: l.kind, refId: l.refId, quantity: l.quantity, price: p, currency: l.currency }
+        );
+
+        toast('Preço atualizado: ' + h.name + ' → ' + fmt(p) + ' ' + curLabel(l.currency));
+      }
+    } catch (err) {
+      toast('Erro: ' + ((err && err.message) || err));
+    }
+
+    slLoad();
+  });
 
   renderList();
   renderHits();
