@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.4.33
+// @version      0.4.35
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -20,7 +20,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.33';
+  const VERSION = '0.4.35';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -6833,6 +6833,8 @@
 
   const npcSt = { key: null, data: {}, cards: [], loading: false, err: '', shopTab: 'buy' };
 
+  const DEPOT_CAT = { stone: 'Stones', heal: 'Cura', revive: 'Reviver', loot: 'Loot', ball: 'Poké Balls', key: 'Chaves', held: 'Held Items', tm: 'TMs', token: 'Tokens', berry: 'Berries' };
+
   const iconUrl = (v) => (!v ? '' : /^(\/|https?:|data:)/i.test(String(v)) ? v : '/assets/items/' + v);
 
   async function gamePost(path, body) {
@@ -7159,7 +7161,7 @@
           `<div class="npc-bar">
             <select id="npc-cat">
               <option value="">Todas as categorias</option>
-              ${cats.map((c) => `<option value="${esc(c)}"${c === cat ? ' selected' : ''}>${esc(cap(c))}</option>`).join('')}
+              ${cats.map((c) => `<option value="${esc(c)}"${c === cat ? ' selected' : ''}>${esc(DEPOT_CAT[c] || cap(c))}</option>`).join('')}
             </select>
           </div>
           <div class="npc-cols">
@@ -7249,24 +7251,62 @@
     } else if (key === 'trader') {
       info = 'Saldo: $ ' + fmt(d.gold) + ' · Time ' + d.teamCount + '/' + d.maxTeam;
 
-      body =
-        ro +
-        npcSec(
-          'Ofertas',
-          (d.offers || [])
-            .map((x) =>
-              npcCard(
-                '',
-                x.name,
-                (x.isTrade ? 'Troca' : '$ ' + fmt(x.price)) +
-                  (x.needsEevee ? ' · precisa Eevee' : '') +
-                  (x.canBuy === false ? ' · <span style="color:#c0392b">indisponível</span>' : ''),
-                null,
-                x.name
-              )
+      const req = (x) =>
+        [
+          x.needsEevee ? 'precisa de Eevee' : '',
+          (x.stones || []).length
+            ? 'precisa: ' + x.stones.map((st) => (typeof st === 'object' ? (st.qty || st.quantity || 1) + '× ' + (st.name || st.id) : st)).join(', ')
+            : ''
+        ]
+          .filter(Boolean)
+          .join(' · ');
+
+      body = npcSec(
+        'Ofertas',
+        (d.offers || [])
+          .map((x) =>
+            npcCard(
+              '',
+              x.name,
+              (x.isTrade ? 'Troca' : '$ ' + fmt(x.price)) +
+                (x.needsEevee ? ' · precisa Eevee' : '') +
+                (x.canBuy === false ? ' · <span style="color:#c0392b">indisponível</span>' : ''),
+              () =>
+                npcHit({
+                  kind: 'pokemon',
+                  name: x.name,
+                  price: x.isTrade ? 0 : x.price,
+                  priceLabel: x.isTrade ? 'Troca' : 'Preço',
+                  raw: { level: 1 },
+                  npcAction:
+                    x.canBuy === false
+                      ? null
+                      : {
+                          label: x.isTrade ? '🔁 Trocar' : '🛒 Comprar',
+                          note: [req(x), 'O Pokémon comprado vai para o depósito.'].filter(Boolean).join(' · '),
+                          confirm: () =>
+                            (x.isTrade ? 'Trocar por ' : 'Comprar ') + x.name + (x.isTrade ? '?' : ' por $ ' + fmt(x.price) + '?'),
+                          run: async () => {
+                            const r = await gamePost('/api/game/pokemaniac-trader/buy', { speciesId: x.speciesId });
+
+                            toast(
+                              (r.isTrade ? 'Trocado: ' : 'Comprado: ') +
+                                (r.name || x.name) +
+                                (r.level ? ' Lv.' + r.level : '') +
+                                (r.goldSpent ? ' · -$ ' + fmt(r.goldSpent) : '') +
+                                (r.toDepot ? ' · foi para o depósito' : '')
+                            );
+                            hideDetails();
+                            npcLoad('trader');
+                          }
+                        }
+                }),
+              x.name
             )
-            .join('')
-        );
+          )
+          .join(''),
+        'Sem ofertas.'
+      );
     }
 
     $('npc-info').textContent = info;
@@ -7342,7 +7382,7 @@
           }
         }
 
-        toast('Guardados: ' + n + ' itens.');
+        toast('Guardado' + (n === 1 ? ': 1 item.' : 's: ' + n + ' itens.'));
         hideDetails();
         npcRender();
       })();
