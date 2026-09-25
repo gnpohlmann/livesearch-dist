@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.4.74
+// @version      0.4.75
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -21,7 +21,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.74';
+  const VERSION = '0.4.75';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -8400,7 +8400,7 @@
           return `<div class="sl-pk${key === sl.sel ? ' on' : ''}" data-key="${esc(key)}">${mkPokeCard(
             h,
             `<div class="mkc-side">
-              <div class="mk-price">${c.sellValue != null ? '<span class="mk-dim">NPC</span> $ ' + fmt(c.sellValue) : ''}</div>
+              <div class="mk-price">${pokeOriginHtml(c)}</div>
               <div class="mk-acts"><button type="button">Anunciar</button></div>
             </div>`
           )}</div>`;
@@ -8477,6 +8477,43 @@
     pseudo.forEach(ensureSprite);
 
     $('sl-hint').textContent = !poke && ownedCache ? 'Inventário lido há ' + ago(ownedCache.t) + '.' : '';
+  }
+
+  // de onde veio o Pokémon: comprado no mercado (com preço) ou capturado
+  function pokeOrigin(p) {
+    const id = String(p.id);
+
+    const bought = state.purchased.find((h) => h.kind === 'pokemon' && h.raw && String(h.raw.capturedId) === id);
+
+    if (bought) return { bought: true, price: bought.price, cur: bought.currency };
+
+    for (const x of sl.history || []) {
+      if (!x.bought) continue;
+
+      const k = seenL[seenKey(x.name, x.price, x.currency)];
+
+      if (k && k.capturedId != null && String(k.capturedId) === id) return { bought: true, price: x.price, cur: x.currency };
+    }
+
+    const base = String(p.name || '').toLowerCase();
+    const same = (sl.pokes || []).filter((q) => String(q.name || '').toLowerCase() === base && q.level === p.level);
+    const cand = (sl.history || []).filter(
+      (x) => x.bought && stripLv(x.name || '').toLowerCase() === base && levelOf(x) === p.level && !(seenL[seenKey(x.name, x.price, x.currency)] || {}).capturedId
+    );
+
+    if (cand.length && same.length === 1) return { bought: true, price: cand[0].price, cur: cand[0].currency };
+
+    return { bought: false };
+  }
+
+  function pokeOriginHtml(p) {
+    const o = pokeOrigin(p);
+
+    if (!o.bought) return '<span class="mk-dim">🎯 Capturado</span>';
+
+    const dia = o.cur === 'DIAMONDS' || o.cur === 'DIAMOND';
+
+    return `<span class="mk-dim">Comprado</span> ${dia ? '💎' : '$'} ${fmt(o.price || 0)}`;
   }
 
   function hsPokeData(x) {
