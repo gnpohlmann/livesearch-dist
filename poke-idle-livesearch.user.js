@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.4.75
+// @version      0.4.83
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -21,7 +21,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.75';
+  const VERSION = '0.4.83';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -37,12 +37,14 @@
     { key: 'held', label: 'Held', title: 'Held Machine', idx: 83, re: /held machine/i, win: /held machine/i },
     { key: 'trader', label: 'Trader', title: 'Pokemaniac Trader', idx: 80, re: /pokemaniac/i, win: /pokemaniac|trader/i }
   ];
-  const MK_CAT_ICON = { all: '▦', Items: '🎒', Stones: '💎', 'Poke Balls': '🔴', Diamonds: '💠', pokemon: '🐾' };
+  const MK_CAT_ICON = { all: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg>', Items: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0v11a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2z"/><path d="M9 21v-5h6v5"/><path d="M10 6h4"/></svg>', Stones: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 4v10l-7 4-7-4V7z"/><path d="M12 3v18"/><path d="M5 7l7 4 7-4"/></svg>', 'Poke Balls': '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h6"/><path d="M15 12h6"/><circle cx="12" cy="12" r="3"/></svg>', Diamonds: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 5h12l3 5-9 10L3 10z"/><path d="M3 10h18"/><path d="M10 5l-2 5 4 10 4-10-2-5"/></svg>', pokemon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="9" r="1.8"/><circle cx="12" cy="6.5" r="1.8"/><circle cx="17" cy="9" r="1.8"/><path d="M8 16.5c0-2.5 2-4.5 4-4.5s4 2 4 4.5c0 1.6-1.3 2.5-2.8 2.1-.8-.2-1.6-.2-2.4 0C9.3 19 8 18.1 8 16.5z"/></svg>' };
   const MK_CATS = [['all', 'Todos'], ['Items', 'Itens'], ['Stones', 'Stones'], ['Poke Balls', 'Poké Balls'], ['Diamonds', 'Diamantes'], ['pokemon', 'Pokémon']];
   const DEBUG = true;
 
   const log = (...a) => DEBUG && console.log('%c[Alertas]', 'color:#e0b95a;font-weight:bold', ...a);
-  const $ = (id) => document.getElementById(id);
+  const pip = { win: null, doc: null };
+  const $ = (id) => document.getElementById(id) || (pip.doc ? pip.doc.getElementById(id) : null);
+  const qa = (sel) => [...document.querySelectorAll(sel), ...(pip.doc ? pip.doc.querySelectorAll(sel) : [])];
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmt = (n) => Number(n).toLocaleString('pt-BR');
@@ -233,7 +235,7 @@
   }
 
   const capSeen = new WeakSet();
-  const wsSt = { sock: null, pokes: null, fam: null, waits: [], seen: new WeakSet() };
+  const wsSt = { sock: null, pokes: null, fam: null, waits: [], seen: new WeakSet(), wseen: new WeakSet(), sends: [] };
 
   function wsIn(ev, v) {
     try {
@@ -243,6 +245,45 @@
     } catch (e) {}
 
     if (typeof v !== 'string' || wsSt.seen.has(ev)) return;
+
+    try {
+      if (v.length < 300000 && /"(gold|dollars?|money|diamonds?)"\s*:/i.test(v) && !/^\{"type":"(field|chat)"/.test(v) && !wsSt.wseen.has(ev)) {
+        wsSt.wseen.add(ev);
+
+        const jw = JSON.parse(v);
+        const g0 = wallet.gold;
+        const d0 = wallet.dia;
+
+        wallet.dia = null;
+        walletScan(jw, 0);
+
+        if (jw && jw.type === 'balls' && jw.counts) wsSt.ballCounts = jw.counts;
+
+        if (wallet.dia == null) {
+          wallet.dia = d0;
+        } else {
+          // aprende qual pedido do jogo traz os diamantes (só pedidos de leitura)
+          const now = Date.now();
+          const req = wsSt.sends
+            .slice()
+            .reverse()
+            .find((x) => now - x.t < 2500 && /^\{"type":"[^"]*(get|open|info|load|sync|shop|list|wallet|balance)[^"]*"/i.test(x.d) && !/(buy|sell|use|trade|claim|spend|open-box|craft)/i.test(x.d));
+
+          if (req && req.d !== store.get('diaWsReq', null)) {
+            store.set('diaWsReq', req.d);
+            log('diamantes: pedido aprendido', req.d);
+          }
+        }
+
+        if (wallet.gold !== g0 || wallet.dia !== d0) walletRender();
+      }
+
+      if (v.startsWith('{"type":"family"')) {
+        const me = ((JSON.parse(v).family || {}).members || []).find((m) => m.isMe);
+
+        if (me && me.name && $('mk-nick') && ($('mk-nick').textContent === '-' || !$('mk-nick').textContent)) $('mk-nick').textContent = me.name;
+      }
+    } catch (e) {}
     if (!(v.startsWith('{"type":"pokes"') || v.startsWith('{"type":"family"') || v.startsWith('{"type":"error"') || v.startsWith('{"type":"toast"') || v.startsWith('{"type":"family-'))) return;
 
     wsSt.seen.add(ev);
@@ -311,6 +352,14 @@
       WSP.send = function (d) {
         try {
           if (!/localhost|livesearch/i.test(String(this.url || ''))) wsSt.sock = this;
+        } catch (e) {}
+
+        try {
+          if (typeof d === 'string' && d.length < 2000) {
+            wsSt.sends.push({ t: Date.now(), d });
+
+            if (wsSt.sends.length > 12) wsSt.sends.shift();
+          }
         } catch (e) {}
 
         try {
@@ -574,11 +623,20 @@
         const u = String((input && input.url) || input || '');
 
         if (u.includes('/api/game/')) {
+          const isGet = String((init && init.method) || 'GET').toUpperCase() === 'GET';
+
           res
             .then((r) => r.clone().json())
             .then((d) => {
               try {
+                const d0 = wallet.dia;
+
+                wallet.dia = null;
                 walletScan(d, 0);
+
+                if (wallet.dia == null) wallet.dia = d0;
+                else if (isGet && !u.includes('/market')) store.set('diaSrc', u.replace(location.origin, ''));
+
                 walletRender();
               } catch (e) {}
             })
@@ -1942,7 +2000,7 @@
           qty
         );
 
-      recordPurchase(h, res, 'Comprado: ');
+      recordPurchase(h, res, 'Comprado: ', qty);
 
       if (cpopFinish) cpopFinish(true);
     } catch (e) {
@@ -1959,7 +2017,7 @@
     }
   }
 
-  function recordPurchase(h, res, label) {
+  function recordPurchase(h, res, label, qty) {
     const hid = h.hid;
 
     setTimeout(renderPurchasedCount, 0);
@@ -1998,6 +2056,7 @@
 
     state.purchased.unshift({
       ...h,
+      quantity: h.kind !== 'pokemon' && qty ? qty : h.quantity,
       purchasedAt: Date.now()
     });
 
@@ -2037,7 +2096,7 @@
     try {
       const res = await buyListing(h.id, qty);
 
-      recordPurchase(h, res || {}, '⚡ Auto-compra: ');
+      recordPurchase(h, res || {}, '⚡ Auto-compra: ', qty);
       save();
       renderList();
 
@@ -3020,7 +3079,7 @@
 
     $('mtal-d-body').innerHTML = `
       ${
-        h.inventory && h.kind === 'pokemon' && h.invRef
+        (h.inventory && h.kind === 'pokemon' && h.invRef) || (h.mine && h.kind === 'pokemon')
           ? `<div class="d-mkc"><div class="mkc-grid">${mkPokeCard(h, '')}</div></div>`
           : rich
           ? rpHtml(h, rv)
@@ -3068,10 +3127,10 @@
       }
 
       ${
-        h.inventory
+        h.inventory || h.mine
           ? `<div id="mtal-d-price" class="mtal-d-sell">
         ${
-          h.kind === 'pokemon'
+          h.kind === 'pokemon' || h.mine
             ? ''
             : `<span>Quantidade</span>
 
@@ -3081,16 +3140,18 @@
         </div>`
         }
 
-        <span>${h.kind === 'pokemon' ? 'Anunciar por' : 'Preço por unidade'}</span>
+        <span>${h.mine ? 'Novo preço' + (h.kind === 'pokemon' ? '' : ' por unidade') + ' <small class="mk-dim">(atual: ' + esc(hitPrice(h)) + ')</small>' : h.kind === 'pokemon' ? 'Anunciar por' : 'Preço por unidade'}</span>
 
         <div class="mtal-d-sellrow">
-          <input type="text" id="mtal-d-sprice" placeholder="0" inputmode="numeric">
+          <input type="text" id="mtal-d-sprice" placeholder="0" inputmode="numeric" value="${h.mine && h.price ? esc(fmt(h.price)) : ''}">
 
           <select id="mtal-d-scur">
             <option value="GOLD">$ Dólares</option>
             <option value="DIAMONDS">💎 Diamantes</option>
           </select>
         </div>
+
+        <div class="mtal-d-fee" id="mtal-d-fee"></div>
 
         <button type="button" id="mtal-d-sgo">$ Anunciar</button>
 
@@ -3151,7 +3212,7 @@
       }
 
       ${
-        isPurchased || h.inventory || !h.buyable
+        isPurchased || h.inventory || h.mine || !h.buyable
           ? ''
           : `${
               h.kind === 'pokemon'
@@ -3252,7 +3313,7 @@
         });
       }
 
-      document.querySelectorAll('#mtal-details [data-step]').forEach((b) =>
+      qa('#mtal-details [data-step]').forEach((b) =>
         b.addEventListener('click', () => {
           const k = +b.dataset.step;
           const cur = qv();
@@ -3285,32 +3346,50 @@
       if (q) setTimeout(() => q.focus(), 0);
     }
 
-    if (h.inventory) {
+    if (h.kind === 'pokemon' && !h.inventory && !h.mine && detailsAnchor === 'mtal-mk' && mk.rows.includes(h) && (h.raw || {}).speciesId) {
+      const dv = document.createElement('div');
+
+      dv.id = 'mtal-d-cmp';
+      dv.className = 'cmp';
+      $('mtal-d-body').appendChild(dv);
+      cmpInit(h);
+    }
+
+    if (h.inventory || h.mine) {
       const sp = $('mtal-d-sprice');
       const sc = $('mtal-d-scur');
       const btn = $('mtal-d-sgo');
 
-      sc.value = sl.lastCur;
+      sc.value = h.mine ? (h.currency === 'DIAMONDS' || h.currency === 'DIAMOND' ? 'DIAMONDS' : 'GOLD') : sl.lastCur;
+
+      const qtyNow = () => (h.mine ? h.quantity || 1 : h.kind === 'pokemon' ? 1 : Math.floor(mkNum('mtal-d-sqty', true) || 0));
 
       const go = () =>
-        slSell(
-          h.invRef,
-          h.kind === 'pokemon' ? 'pokemon' : 'item',
-          mkNum('mtal-d-sprice', true),
-          sc.value,
-          h.kind === 'pokemon' ? 1 : Math.floor(mkNum('mtal-d-sqty', true) || 0),
-          btn
-        );
+        h.mine
+          ? slReprice(h, mkNum('mtal-d-sprice', true), sc.value, btn)
+          : slSell(
+              h.invRef,
+              h.kind === 'pokemon' ? 'pokemon' : 'item',
+              mkNum('mtal-d-sprice', true),
+              sc.value,
+              qtyNow(),
+              btn
+            );
 
       const btnLabel = () => {
-        btn.textContent = (sc.value === 'DIAMONDS' ? '💎' : '$') + ' Anunciar';
+        btn.textContent = (sc.value === 'DIAMONDS' ? '💎' : '$') + (h.mine ? ' Atualizar anúncio' : ' Anunciar');
+        feeRender(mkNum('mtal-d-sprice', true), sc.value, qtyNow());
       };
 
       btnLabel();
 
       btn.addEventListener('click', go);
+      sp.addEventListener('input', btnLabel);
+
+      if ($('mtal-d-sqty')) $('mtal-d-sqty').addEventListener('input', btnLabel);
+
       sc.addEventListener('change', () => {
-        sl.lastCur = sc.value;
+        if (!h.mine) sl.lastCur = sc.value;
         btnLabel();
       });
       sp.addEventListener('keydown', (e) => {
@@ -3359,6 +3438,8 @@
   function positionDetails() {
     const d = $('mtal-details');
     const p = $(detailsAnchor);
+
+    if (d && pip.doc && d.ownerDocument === pip.doc) return;
 
     if (!d || !p || d.style.display !== 'block' || getComputedStyle(p).display === 'none') return;
 
@@ -3416,9 +3497,30 @@
     if (c && Date.now() - c.t < 60000) return c.p;
 
     const p = new Promise((res, rej) => {
-      if (typeof GM_xmlhttpRequest !== 'function') return rej(new Error('sem permissão de rede'));
+      const xhr =
+        typeof GM_xmlhttpRequest === 'function'
+          ? GM_xmlhttpRequest
+          : typeof GM !== 'undefined' && GM && typeof GM.xmlHttpRequest === 'function'
+            ? GM.xmlHttpRequest.bind(GM)
+            : null;
 
-      GM_xmlhttpRequest({
+      if (!xhr) {
+        // sem API de rede do gerenciador (ex.: PokeGrid): tenta direto
+        fetch(url, { headers: { accept: 'application/json' }, mode: 'cors', credentials: 'omit' })
+          .then(async (r) => {
+            const j = await r.json().catch(() => null);
+
+            if (!r.ok) throw new Error('PokeIdle Market: ' + ((j && j.error) || 'HTTP ' + r.status));
+
+            log('PokeIdle Market (fetch):', url, j);
+            res(extParse(j));
+          })
+          .catch((e) => rej(/PokeIdle/.test(String(e && e.message)) ? e : new Error('PokeIdle Market bloqueado neste app (use o Tampermonkey no navegador)')));
+
+        return;
+      }
+
+      xhr({
         method: 'GET',
         url,
         headers: { accept: 'application/json' },
@@ -3589,6 +3691,8 @@
 
       const m = cmpM();
       const mineIds = new Set((sl.mine || []).map((x) => x.id));
+
+      if (h.id) mineIds.add(h.id);
       const selling = (live || [])
         .map((l) => ({ id: l.id, iv: l.ivTotal, q: l.quality != null ? +l.quality : null, lv: l.level, sh: !!l.shiny, p: l.price, cur: l.currency, off: !!l.offerOnly }))
         .filter((o) => !mineIds.has(o.id) && match(o))
@@ -3614,7 +3718,7 @@
           <div><span>À venda agora</span>${live ? both(minOf(selling, false), minOf(selling, true)) : `<small>${err ? '⚠ ' + esc(err) : 'buscando…'}</small>`}</div>
           <div><span>Última saída</span>${both(lastOf(gone, false), lastOf(gone, true))}</div>
         </div>
-        <a class="cmp-ext" href="${esc(extUrl)}" target="_blank" rel="noopener">🔗 Ver saídas no PokeIdle Market</a>
+
 
         <div class="cmp-sec">À venda agora (${selling.length})</div>
         <div class="cmp-list">${selling.slice(0, 8).map((o) => row(o, '')).join('') || `<div class="cmp-empty">${live ? 'Nenhum parecido à venda.' : err ? '⚠ ' + esc(err) : 'Buscando anúncios…'}</div>`}</div>
@@ -3626,7 +3730,7 @@
             !ext ? 'Buscando no PokeIdle Market…' : extErr ? '⚠ ' + esc(extErr) : (ext || []).length ? 'Nenhuma saída parecida nos últimos 7 dias.' : 'Nenhuma saída nos últimos 7 dias.'
           }</div>`
         }</div>
-        <div class="cmp-note">Clique numa linha para usar o preço.</div>`;
+        ${$('mtal-d-sprice') ? '<div class="cmp-note">Clique numa linha para usar o preço.</div>' : ''}`;
     };
 
     draw();
@@ -3655,6 +3759,7 @@
         }
 
         $('mtal-d-sprice').value = fmt(+rw.dataset.cmpp);
+        $('mtal-d-sprice').dispatchEvent(new Event('input', { bubbles: true }));
         $('mtal-d-sprice').focus();
       }
     };
@@ -3689,6 +3794,13 @@
 
   function showDetails(h, anchor) {
     detailsAnchor = anchor || 'mtal-panel';
+
+    try {
+      const dd = $('mtal-details');
+      const target = pip.doc && detailsAnchor !== 'mtal-mk' ? pip.doc.body : document.body;
+
+      if (dd && dd.ownerDocument !== target.ownerDocument) target.appendChild(dd);
+    } catch (e) {}
 
     renderDetails(h);
 
@@ -4036,7 +4148,11 @@
     .mtal-confirming{outline:1px solid #e8eaf2;outline-offset:-1px}
     #mtal-panel-body{flex:1;min-height:0;overflow-y:auto;padding:0 10px 10px 10px;scrollbar-width:thin}
     #mtal-panel-body::-webkit-scrollbar{width:3px}
-    #mtal-footer{flex:none;text-align:center;padding:6px 10px;font-size:10px;letter-spacing:.03em;color:#9aa0b8;border-top:1px solid #232840;background:#12141f}
+    #mtal-footer{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 12px;font-size:10px;letter-spacing:.03em;color:#9aa0b8;border-top:1px solid #232840;background:#12141f}
+    #mtal-footer .mtal-fw{display:flex;gap:12px;font-size:11px;letter-spacing:0}
+    #mtal-footer .mtal-fw b{color:#f0d78c;font-weight:700}
+    #mtal-footer .mtal-fw span:last-child b{color:#55d6f0}
+    #mtal-footer .mtal-fv{display:flex;align-items:center}
     #mtal-upd{margin-left:6px;padding:1px 7px;border-radius:999px;background:#2c4a2c;border:1px solid #3f6b3f;color:#b6e08a;text-decoration:none;font-weight:700}
     #mtal-upd:hover{border-color:#b5934f;color:#f0d78c}
 
@@ -4261,6 +4377,17 @@
 
     #mtal-panel .mtal-hit.lsp{grid-template-columns:52px 120px minmax(0,1fr) 36px;gap:10px;min-height:0;padding:10px 12px}
     #mtal-panel .lsp-block{justify-self:center;display:flex;align-items:center;gap:14px}
+    #mtal-panel .lsi .lsp-sp .mtal-hit-thumb img{max-width:40px;max-height:40px;image-rendering:pixelated}
+    #mtal-panel .lsi-tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+    #mtal-panel .lsi-cat{padding:1px 8px;border-radius:999px;background:#262b3f;color:#c7cbe0;font-size:9.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase}
+    #mtal-panel .lsi-npc{padding:1px 8px;border-radius:999px;background:#1d3325;color:#61f6a4;font-size:9.5px;font-weight:700}
+    #mtal-panel .lsi-alert{margin-top:5px;font-size:10px;color:#7c829c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #mtal-panel .lsi-block{justify-self:stretch;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+    #mtal-panel .lsi-box{display:flex;flex-direction:column;align-items:flex-start;min-width:0;padding:6px 8px;background:#161927;border:1px solid #232840;border-radius:8px}
+    #mtal-panel .lsi-box span{font-size:9px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#7c829c}
+    #mtal-panel .lsi-box b{max-width:100%;font-size:12.5px;color:#f2ead0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #mtal-panel .lsi-box b.gold{color:#f0d78c}
+    #mtal-panel .lsi-box b.dia{color:#55d6f0}
     #mtal-panel .lsp-block .lsp-grade{width:124px}
     #mtal-panel .lsp-block .lsp-stats{width:156px}
     #mtal-panel .lsp-sp{display:flex;flex-direction:column;align-items:center;gap:4px}
@@ -4638,7 +4765,8 @@
     #mtal-mk .mk-wallet{margin-top:auto;display:flex;flex-direction:column;gap:4px;padding:10px;border-top:1px solid #232840;font-size:11.5px;color:#9aa0b8}
     #mtal-mk .mk-wallet b{color:#f2ead0;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     #mtal-mk .mk-wallet em{font-style:normal;font-weight:700;color:#f0d78c}
-    #mtal-mk .mk-side .mk-cat i{width:18px;font-style:normal;font-size:13px;text-align:center;opacity:.8}
+    #mtal-mk .mk-side .mk-cat i{display:grid;place-items:center;flex:none;width:18px;height:18px;font-style:normal;opacity:.75}
+    #mtal-mk .mk-side .mk-cat i svg{display:block}
     #mtal-mk .mk-side .mk-cat:hover{background:#1a1e30;color:#e8e3d0}
     #mtal-mk .mk-side .mk-cat.active{background:#262b3f;color:#fff;box-shadow:inset 3px 0 0 #e8eaf2}
     #mtal-mk .mk-side .mk-cat.active i{opacity:1}
@@ -4669,6 +4797,7 @@
     #mtal-mk .mk-range i{font-style:normal;color:#7c829c}
     #mtal-mk .mk-chk{display:flex;align-items:center;gap:6px;color:#c7cbe0;cursor:pointer}
     #mtal-mk .mk-fcol .mk-chips{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:0}
+    #mtal-mk .mk-fcol .mk-stonechips .mk-chip{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:5px 4px}
     #mtal-mk .mk-fcol .mk-chip{padding:5px 0;border:1px solid #2c3148;border-radius:6px;opacity:.75}
     #mtal-mk .mk-fcol .mk-chip:hover{opacity:1;border-color:#4a4f66}
     #mtal-mk .mk-fcol .mk-chip.on{opacity:1;border-color:currentColor;background:color-mix(in srgb,currentColor 14%,transparent)}
@@ -4774,8 +4903,15 @@
     #mtal-mk .hs-day{display:flex;align-items:baseline;gap:8px;margin:14px 0 6px;padding-bottom:4px;border-bottom:1px solid #232840}
     #mtal-mk .hs-day span{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#c7cbe0}
     #mtal-mk .hs-day small{font-size:10.5px;color:#7c829c}
+    #mtal-mk .hs-dbal{margin-left:auto;display:flex;align-items:baseline;gap:6px;font-style:normal;font-size:12px}
+    #mtal-mk .hs-dbal i{font-style:normal;color:#4a4f66}
+    #mtal-mk #hs-list{container-type:inline-size}
+    #mtal-mk .hs-pk{cursor:pointer}
+    #mtal-mk .hs-pk:hover .mkc{border-color:#4a4f66}
+    #mtal-mk .hs-pk.on .mkc{border-color:#c7cbe0;background:#1e2336}
+    #mtal-mk .hs-pk .mkc-side{gap:4px}
     #mtal-mk #hs-list{display:flex;flex-direction:column;gap:6px}
-    #mtal-mk .hs-row{display:grid;grid-template-columns:40px minmax(0,1fr) auto 130px;align-items:center;gap:12px;padding:6px 12px 6px 8px;background:#1a1e30;border:1px solid #232840;border-radius:8px;cursor:pointer}
+    #mtal-mk .hs-row{display:grid;grid-template-columns:40px minmax(0,1fr) 150px;align-items:center;gap:12px;padding:6px 12px 6px 8px;background:#1a1e30;border:1px solid #232840;border-radius:8px;cursor:pointer}
     #mtal-mk .hs-row:hover{border-color:#4a4f66}
     #mtal-mk .hs-row.on{border-color:#c7cbe0;background:#1e2336}
     #mtal-mk .hs-th{width:40px;height:40px;display:grid;place-items:center}
@@ -4785,7 +4921,8 @@
     #mtal-mk .hs-tag{padding:2px 9px;border-radius:999px;font-size:10.5px;font-weight:700;white-space:nowrap}
     #mtal-mk .hs-tag.buy{background:#1d2a45;color:#7aa2ff}
     #mtal-mk .hs-tag.sell{background:#1d3325;color:#61f6a4}
-    #mtal-mk .hs-right{display:flex;flex-direction:column;align-items:flex-end}
+    #mtal-mk .hs-right{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+    #mtal-mk .hs-pk .mkc-side{align-items:flex-end}
     #mtal-mk .hs-right b{font-size:13px;white-space:nowrap}
     #mtal-mk .hs-right small{font-size:10.5px;color:#7c829c}
     #mtal-mk .mk-seg{display:flex}
@@ -4813,6 +4950,8 @@
     #mtal-mk .mk-coll:hover{color:#fff;border-color:#e8eaf2}
     #mtal-mk .mk-coll::after{content:'clique para expandir/recolher';margin-left:auto;font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;color:#7c829c}
     #mtal-d-price.mtal-d-sell{text-align:left}
+    .mtal-d-fee{margin:6px 0 2px;font-size:11px;color:#c7cbe0}
+    .mtal-d-fee b{color:#f0d78c}
     #mtal-details .d-mkc .mkc-bar{padding:8px 10px;text-transform:none;letter-spacing:0;font-size:11px;font-weight:600}
     #mtal-details .d-mkc .mkc-sort{margin-left:6px;padding:3px 10px;font-size:11px}
     #mtal-details .d-mkc .mkc-barin{display:flex;align-items:center;justify-content:space-between;gap:10px}
@@ -4993,6 +5132,9 @@
     #mtal-mk .npc-rn b{color:#f2ead0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     #mtal-mk .npc-arrow{flex:none;width:36px;height:30px;padding:0;font-size:16px;color:#f0d78c}
     #mtal-mk .npc-subtabs{margin:0 0 10px}
+    #mtal-mk .npc-have{display:block;margin-top:2px;font-size:10.5px;color:#9aa0b8}
+    #mtal-mk .npc-have b{color:#61f6a4}
+    #mtal-mk .npc-have.zero b{color:#7c829c}
     #mtal-mk .npc-toprow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
     #mtal-mk .npc-toprow .npc-tabs{margin:0}
     #mtal-mk .npc-pf{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-bottom:10px;padding:8px 10px;background:#171a28;border:1px solid #2c3148;border-radius:8px;font-size:11.5px;color:#9aa0b8}
@@ -5152,6 +5294,13 @@
             title="Notificação do Windows/navegador"
           >
             🔔
+          </button>
+
+          <button
+            id="mtal-pip"
+            title="Destacar: abre o LiveSearch numa janela flutuante que fica por cima de tudo (pode ir para fora do navegador)"
+          >
+            ⧉
           </button>
 
           <button
@@ -5326,8 +5475,8 @@
       </div>
 
       <div id="mtal-footer">
-        <span id="mtal-ver">Version ${VERSION}</span>
-        <a id="mtal-upd" hidden target="_blank" rel="noopener"></a>
+        <span class="mtal-fw"><span>$ <b id="mtal-fgold">-</b></span><span>💎 <b id="mtal-fdia">-</b></span></span>
+        <span class="mtal-fv"><span id="mtal-ver">Version ${VERSION}</span><a id="mtal-upd" hidden target="_blank" rel="noopener"></a></span>
       </div>
     </div>
 
@@ -5426,6 +5575,11 @@
               <i></i>
               Só shiny ✨
             </label>
+          </div>
+
+          <div class="mk-fgroup mk-stone" hidden>
+            <div class="mk-flabel">Tipo de stone</div>
+            <div class="mk-chips mk-stonechips" id="mk-stonechips"></div>
           </div>
 
           <div class="mk-fgroup mk-item">
@@ -5672,6 +5826,40 @@
     return { kind, move: best, inferred };
   }
 
+  function lsItemCard(h, time, purchased) {
+    const r = h.raw || {};
+    const qty = h.quantity != null ? h.quantity : 1;
+    const dia = h.currency === 'DIAMONDS' || h.currency === 'DIAMOND';
+    const cur = dia ? '💎' : '$';
+    const npc = r.npcPrice != null ? r.npcPrice : null;
+    const total = h.price != null ? h.price * qty : null;
+
+    return `<div class="mtal-hit lsp lsi" data-hid="${h.hid}">
+      <div class="lsp-sp">
+        <div class="mtal-hit-thumb" data-hid="${h.hid}">${thumbHtml(h)}</div>
+        <div class="mtal-hit-date">${time}</div>
+      </div>
+
+      <div class="lsp-id">
+        <div class="mtal-hit-name" title="${esc(h.name || '')}">${esc(h.name || '-')}</div>
+        <div class="lsi-tags"><span class="lsi-cat">${esc(catLabel(h.category) || 'Item')}</span>${h.belowNpc ? '<span class="lsi-npc">abaixo do NPC</span>' : ''}</div>
+        ${npc != null ? `<div class="lsi-alert">NPC paga $ ${fmt(npc)}/un</div>` : ''}
+        <div class="lsi-alert" title="Alerta: ${esc(h.alert || '')}">🔔 ${esc(h.alert || '')}</div>
+      </div>
+
+      <div class="lsp-block lsi-block">
+        <div class="lsi-box"><span>Quantidade</span><b>${fmt(qty)}×</b></div>
+        <div class="lsi-box"><span>Preço/un</span><b class="${dia ? 'dia' : 'gold'}">${h.offerOnly ? 'oferta' : cur + ' ' + fmt(h.price || 0)}</b></div>
+        <div class="lsi-box"><span>${purchased ? 'Pago' : 'Total'}</span><b class="${dia ? 'dia' : 'gold'}">${h.offerOnly || total == null ? '-' : cur + ' ' + fmt(total)}</b></div>
+      </div>
+
+      <div class="mtal-hit-actions lsp-acts">
+        <button type="button" class="mtal-view${purchased ? ' mtal-view-p' : ''}${h.hid === detailsHid ? ' active' : ''}" data-hid="${h.hid}" title="Detalhes">${EYE_SVG}</button>
+        ${!purchased && h.buyable ? `<button type="button" class="mtal-buy" data-hid="${h.hid}" title="Comprar">🛒</button>` : ''}
+      </div>
+    </div>`;
+  }
+
   function lsPokeCard(h, time, purchased) {
     const v = rpInit(h);
     const R = rpCompute(v);
@@ -5724,8 +5912,7 @@
 
       <div class="mtal-hit-actions lsp-acts">
         ${purchased
-          ? `<button type="button" class="mtal-view mtal-view-p${h.hid === detailsHid ? ' active' : ''}" data-hid="${h.hid}" title="Detalhes">${EYE_SVG}</button>
-        <button type="button" class="mtal-mkt" data-hid="${h.hid}" title="Abrir no Market">⚖️</button>`
+          ? `<button type="button" class="mtal-view mtal-view-p${h.hid === detailsHid ? ' active' : ''}" data-hid="${h.hid}" title="Detalhes">${EYE_SVG}</button>`
           : `<button type="button" class="mtal-view${h.hid === detailsHid ? ' active' : ''}" data-hid="${h.hid}" title="Detalhes">${EYE_SVG}</button>
         ${h.buyable ? `<button type="button" class="mtal-buy" data-hid="${h.hid}" title="Comprar">🛒</button>` : ''}`}
       </div>
@@ -5748,70 +5935,7 @@
       hits.length
         ? hits
             .map(
-              (h) => h.kind === 'pokemon' ? lsPokeCard(h, t(h.t)) : `
-        <div
-          class="mtal-hit"
-          data-hid="${h.hid}"
-        >
-          <div class="mtal-hit-thumb-wrap">
-            <div
-              class="mtal-hit-thumb"
-              data-hid="${h.hid}"
-            >
-              ${hitMiniThumb(h) || thumbHtml(h)}
-            </div>
-
-            <div
-              class="mtal-hit-alert"
-              title="${esc(h.alert)}"
-            >
-              ${esc(h.kind === 'pokemon' ? 'Pokémon' : catLabel(h.category) || 'Item')}
-            </div>
-
-            <div class="mtal-hit-date">
-              ${t(h.t)}
-            </div>
-          </div>
-
-          <div class="mtal-hit-main">
-            <div class="mtal-hit-desc">
-              ${h.kind === 'pokemon' ? hitMiniDesc(h) : hitDesc(h)}
-            </div>
-
-            <div class="mtal-hit-price">
-              ${esc(hitPrice(h))}
-            </div>
-          </div>
-
-          <div class="mtal-hit-actions">
-            <button
-              type="button"
-              class="mtal-view${
-                h.hid === detailsHid
-                  ? ' active'
-                  : ''
-              }"
-              data-hid="${h.hid}"
-              title="Detalhes"
-            >
-              ${EYE_SVG}
-            </button>
-
-            ${
-              h.buyable
-                ? `<button
-                    type="button"
-                    class="mtal-buy"
-                    data-hid="${h.hid}"
-                    title="Comprar"
-                  >
-                    🛒
-                  </button>`
-                : ''
-            }
-          </div>
-        </div>
-      `
+              (h) => (h.kind === 'pokemon' ? lsPokeCard(h, t(h.t)) : lsItemCard(h, t(h.t)))
             )
             .join('')
         : `
@@ -5859,74 +5983,15 @@
       state.purchased.length
         ? state.purchased
             .map(
-              (h) => h.kind === 'pokemon' ? lsPokeCard(h, t(h.purchasedAt || h.t), true) : `
-        <div
-          class="mtal-hit"
-          data-hid="${h.hid}"
-        >
-          <div class="mtal-hit-thumb-wrap">
-            <div
-              class="mtal-hit-thumb"
-              data-hid="${h.hid}"
-            >
-              ${thumbHtml(h)}
-            </div>
-
-            <div
-              class="mtal-hit-alert"
-              title="${esc(h.alert)}"
-            >
-              ${esc(h.kind === 'pokemon' ? 'Pokémon' : catLabel(h.category) || 'Item')}
-            </div>
-
-            <div class="mtal-hit-date">
-              ${t(
-                h.purchasedAt ||
-                  h.t
-              )}
-            </div>
-          </div>
-
-          <div class="mtal-hit-main">
-            <div class="mtal-hit-desc">
-              ${hitDesc(h)}
-            </div>
-
-            <div class="mtal-hit-price">
-              ${esc(hitPrice(h))}
-            </div>
-          </div>
-
-          <div class="mtal-hit-actions">
-            <button
-              type="button"
-              class="mtal-mkt"
-              data-hid="${h.hid}"
-              title="Abrir no Market"
-            >
-              ⚖️
-            </button>
-
-            <button
-              type="button"
-              class="mtal-view mtal-view-p${
-                h.hid === detailsHid
-                  ? ' active'
-                  : ''
-              }"
-              data-hid="${h.hid}"
-              title="Detalhes"
-            >
-              ${EYE_SVG}
-            </button>
-          </div>
-        </div>
-      `
+              (h) => (h.kind === 'pokemon' ? lsPokeCard(h, t(h.purchasedAt || h.t), true) : lsItemCard(h, t(h.purchasedAt || h.t), true))
             )
             .join('')
         : `
-          <div class="mtal-empty">
-            Nenhuma compra ainda.
+          <div class="mtal-emptycard">
+            <div class="ic">🛒</div>
+            <b>Nenhuma compra ainda</b>
+            <p>Tudo o que você comprar pelo LiveSearch — no 🛒 dos achados ou pela compra automática ⚡ — fica guardado aqui.</p>
+            ${hits.length ? `<button type="button" class="mtal-primary" data-goto-hits>Ver achados (${hits.length})</button>` : '<small>Crie um alerta e ative a compra automática para comprar sem precisar clicar.</small>'}
           </div>
         `;
 
@@ -6415,6 +6480,64 @@
         }
       }
     );
+
+  async function pipOpen() {
+    if (pip.win) {
+      pip.win.close();
+      return;
+    }
+
+    const api = PW.documentPictureInPicture || window.documentPictureInPicture;
+
+    if (!api) return toast('Seu navegador não suporta janela flutuante (use Chrome, Edge ou Brave atualizados).');
+
+    let w;
+
+    try {
+      w = await api.requestWindow({ width: 660, height: 820 });
+    } catch (e) {
+      return toast('Não consegui abrir a janela flutuante: ' + ((e && e.message) || e));
+    }
+
+    const panel = $('mtal-panel');
+    const home = panel.parentNode;
+
+    [...document.head.querySelectorAll('style, link[rel="stylesheet"]')].forEach((n) => w.document.head.appendChild(n.cloneNode(true)));
+
+    const st = w.document.createElement('style');
+
+    st.textContent = `
+      html,body{margin:0;height:100%;background:#12141f}
+      body.mtal-pipbody #mtal-panel{position:static!important;display:flex!important;flex-direction:column;width:auto!important;height:100vh!important;max-height:none!important;left:auto!important;top:auto!important;bottom:auto!important;border:none!important;border-radius:0!important;box-shadow:none!important}
+      body.mtal-pipbody #mtal-panel-head{max-height:calc(100vh - 34px)!important}
+      body.mtal-pipbody #mtal-drag-handle{cursor:default}
+      body.mtal-pipbody #mtal-details{position:fixed!important;right:0!important;left:auto!important;top:0!important;bottom:0!important;height:auto!important;max-height:none!important;width:320px!important;border-radius:0!important}
+      body.mtal-pipbody #mtal-pip{background:#e8eaf2;color:#12141f}`;
+    w.document.head.appendChild(st);
+    w.document.title = 'Poke Idle · LiveSearch';
+    w.document.body.className = 'mtal-pipbody';
+    w.document.body.appendChild(panel);
+    panel.style.display = 'block';
+    panelOpen = true;
+
+    pip.win = w;
+    pip.doc = w.document;
+    pip.home = home;
+
+    w.addEventListener('pagehide', () => {
+      const d = $('mtal-details');
+
+      pip.home.appendChild(panel);
+
+      if (d && d.ownerDocument !== document) document.body.appendChild(d);
+
+      pip.win = null;
+      pip.doc = null;
+      panel.style.display = panelOpen ? 'block' : 'none';
+    });
+  }
+
+  $('mtal-pip').addEventListener('click', pipOpen);
 
   $('mtal-close')
     .addEventListener(
@@ -7034,6 +7157,14 @@
     .addEventListener(
       'click',
       (e) => {
+        if (e.target.closest('[data-goto-hits]')) {
+          const tb = qa('.mtal-tab:not([data-tab="purchased"])')[0];
+
+          if (tb) tb.click();
+
+          return;
+        }
+
         const mktBtn =
           e.target.closest(
             '.mtal-mkt'
@@ -7087,8 +7218,7 @@
           activeTab =
             btn.dataset.tab;
 
-          document
-            .querySelectorAll(
+          qa(
               '.mtal-tab'
             )
             .forEach(
@@ -7386,9 +7516,23 @@
     err: '',
     sort: { k: null, dir: -1 },
     rar: new Set(),
+    stones: new Set(),
     mode: 'buy',
     view: store.get('mkView', 'list')
   };
+
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest && e.target.closest('#mk-stonechips [data-stone]');
+
+    if (!b) return;
+
+    const t = b.dataset.stone;
+
+    if (mk.stones.has(t)) mk.stones.delete(t);
+    else mk.stones.add(t);
+
+    mkRender();
+  });
 
   const mkNum = (id, int) => {
     let s = String($(id).value || '').trim();
@@ -7475,7 +7619,7 @@
   }
 
   const mkServerKey = (f) =>
-    [mk.cat, f.speciesId, f.ivMin, f.qMin].join('|');
+    [mk.cat, f.speciesId, f.ivMin, mkSrvQ(f)].join('|');
 
   function mkHit(l) {
     const poke = l.kind === 'pokemon' || mk.cat === 'pokemon';
@@ -7501,6 +7645,19 @@
       raw: l,
       buyable: !l.offerOnly && !!id
     };
+  }
+
+  // qualidade mínima enviada ao servidor: a maior entre o campo "×" e a menor raridade marcada
+  function mkSrvQ(f) {
+    let q = f.qMin || 0;
+
+    if (mk.rar.size) {
+      const mins = QUALITY_TIERS.filter(([, l]) => mk.rar.has(l)).map(([t]) => t);
+
+      if (mins.length) q = Math.max(q, Math.min(...mins));
+    }
+
+    return q > 0 ? q : null;
   }
 
   async function mkLoad(reset) {
@@ -7543,7 +7700,7 @@
 
           if (f.speciesId) q += '&speciesId=' + f.speciesId;
           if (f.ivMin) q += '&ivMin=' + f.ivMin;
-          if (f.qMin) q += '&qMin=' + f.qMin;
+          if (mkSrvQ(f)) q += '&qMin=' + mkSrvQ(f);
         } else {
           q = '?category=' + encodeURIComponent(cat);
         }
@@ -7611,9 +7768,34 @@
     clearTimeout(mkAutoT);
 
     if (mk.cat !== 'pokemon' || mk.done || mk.loading || !mkClientFiltered()) return;
-    if (mkVisible().length >= 60 || mk.page > 80) return;
+    if (mkVisible().length >= 40 || mk.page > 120) return;
 
     mkAutoT = setTimeout(() => mkLoad(false), 200);
+  }
+
+  const stoneType = (n) => String(n || '').replace(/\s*stone\s*$/i, '').trim() || String(n || '');
+
+  const STONE_COLOR = {
+    thunder: 'electric', leaf: 'grass', heart: 'fairy', earth: 'ground', venom: 'poison', punch: 'fighting',
+    cocoon: 'bug', crystal: 'dragon', enigma: 'psychic', metal: 'steel', feather: 'flying', darkness: 'dark', ancient: 'rock'
+  };
+
+  function mkStoneChips() {
+    const el = $('mk-stonechips');
+
+    if (!el) return;
+
+    const types = [...new Set(mk.rows.filter((h) => h.kind !== 'pokemon').map((h) => stoneType(h.name)))].sort((a, b) => a.localeCompare(b));
+
+    el.innerHTML =
+      types
+        .map((t) => {
+          const k = t.toLowerCase();
+          const c = TYPE_COLOR[k] || TYPE_COLOR[STONE_COLOR[k]] || '#c7cbe0';
+
+          return `<button type="button" class="mk-chip${mk.stones.has(t) ? ' on' : ''}" data-stone="${esc(t)}" style="color:${c}">${esc(t)}</button>`;
+        })
+        .join('') || '<span class="mk-dim">Carregando…</span>';
   }
 
   function mkVisible() {
@@ -7634,6 +7816,8 @@
       } else if (f.npc && !h.belowNpc) {
         return false;
       }
+
+      if (mk.cat === 'Stones' && mk.stones.size && !mk.stones.has(stoneType(h.name))) return false;
 
       if (f.cur && h.currency !== f.cur) return false;
       const lim = h.currency === 'DIAMONDS' ? f.pmaxD : h.currency === 'GOLD' ? f.pmaxG : null;
@@ -7734,6 +7918,9 @@
     );
     document.querySelectorAll('#mtal-mk .mk-poke').forEach((el) => (el.hidden = !poke));
     document.querySelectorAll('#mtal-mk .mk-item').forEach((el) => (el.hidden = poke || mk.cat === 'all'));
+    document.querySelectorAll('#mtal-mk .mk-stone').forEach((el) => (el.hidden = mk.cat !== 'Stones'));
+
+    if (mk.cat === 'Stones') mkStoneChips();
 
     $('mk-q').placeholder = poke ? 'Espécie ou nome…' : 'Nome do item…';
 
@@ -7783,7 +7970,6 @@
           const img = `<td class="mk-img"><div class="mtal-hit-thumb mk-thumb" data-hid="${h.hid}">${thumbHtml(h)}</div></td>`;
           const price = `<td class="mk-price">${esc(hitPrice(h))}</td>`;
           const acts = `<td class="mk-acts">
-            <button type="button" class="mk-mkt" data-hid="${h.hid}" title="Abrir no Market">⚖️</button>
             ${h.buyable ? `<button type="button" class="mk-buy" data-hid="${h.hid}" title="Comprar">🛒</button>` : ''}
           </td>`;
 
@@ -7891,7 +8077,12 @@
   }
 
   function walletRender() {
+    if (wallet.dia != null) store.set('lastDia', wallet.dia);
+    else if (store.get('lastDia', null) != null) wallet.dia = store.get('lastDia', null);
+
     if ($('mk-gold')) $('mk-gold').textContent = wallet.gold != null ? fmt(wallet.gold) : '-';
+    if ($('mtal-fgold')) $('mtal-fgold').textContent = wallet.gold != null ? fmt(wallet.gold) : '-';
+    if ($('mtal-fdia')) $('mtal-fdia').textContent = wallet.dia != null ? fmt(wallet.dia) : '-';
     if ($('mk-dia')) $('mk-dia').textContent = wallet.dia != null ? fmt(wallet.dia) : '-';
   }
 
@@ -7921,13 +8112,53 @@
       walletScan(await gameGet('/api/game/shop'), 0);
     } catch (e) {}
 
+    const dw = store.get('diaWsReq', null);
+
+    if (dw && wsSt.sock && wsSt.sock.readyState === 1) {
+      try {
+        wsSt.sock.send(dw);
+      } catch (e) {}
+    }
+
+    const ds = store.get('diaSrc', null);
+
+    if (ds) {
+      try {
+        const d0 = wallet.dia;
+
+        wallet.dia = null;
+        walletScan(await gameGet(ds), 0);
+
+        if (wallet.dia == null) wallet.dia = d0;
+      } catch (e) {}
+    }
+
     walletRender();
   }
+
+  let walletT = null;
+
+  setTimeout(() => {
+    try {
+      walletRefresh();
+    } catch (e) {}
+  }, 4000);
+  setInterval(() => {
+    try {
+      if (panelOpen && $('mtal-mk').style.display !== 'flex') walletRefresh();
+    } catch (e) {}
+  }, 30000);
 
   function mkOpen() {
     $('mtal-mk').style.display = 'flex';
 
     walletRefresh();
+    clearInterval(walletT);
+    walletT = setInterval(() => {
+      if ($('mtal-mk').style.display === 'none') return clearInterval(walletT);
+
+      walletRefresh();
+    }, 20000);
 
     if (!species) loadSpecies();
 
@@ -7956,11 +8187,22 @@
   });
   $('mk-more').addEventListener('click', () => mkLoad(false));
 
+  document.querySelector('#mtal-mk .mk-table-wrap').addEventListener(
+    'scroll',
+    (e) => {
+      const el = e.currentTarget;
+
+      if (mk.cat === 'pokemon' && !mk.loading && !mk.done && el.scrollTop + el.clientHeight > el.scrollHeight - 300) mkLoad(false);
+    },
+    { passive: true }
+  );
+
   document.querySelectorAll('#mtal-mk .mk-cat').forEach((b) =>
     b.addEventListener('click', () => {
       if (mk.cat === b.dataset.cat) return;
 
       mk.cat = b.dataset.cat;
+      mk.stones.clear();
       mk.sort = { k: null, dir: -1 };
       $('mk-q').value = '';
       mkLoad(true);
@@ -7981,8 +8223,13 @@
     }
 
     c.classList.toggle('on', mk.rar.has(r));
-    mkRender();
-    mkAutoMore();
+
+    if (mk.cat === 'pokemon' && mkServerKey(mkFilters()) !== mk.key) {
+      mkLoad(true);
+    } else {
+      mkRender();
+      mkAutoMore();
+    }
   });
 
   let mkTimer = null;
@@ -8015,6 +8262,7 @@
     $('mk-cur').value = '';
     $('mk-type').value = '';
     mk.rar.clear();
+    mk.stones.clear();
     document.querySelectorAll('#mtal-mk .mk-chip').forEach((c) => c.classList.remove('on'));
     mkOnFilter();
   });
@@ -8118,6 +8366,7 @@
       hid: ++hitSeq,
       t: Date.now(),
       alert: 'Meus anúncios',
+      mine: true,
       id: l.id,
       kind: l.kind === 'pokemon' ? 'pokemon' : 'items',
       category: l.kind === 'pokemon' ? null : l.category,
@@ -8269,6 +8518,127 @@
     };
   }
 
+  const feeInfo = () => store.get('mkFee', null);
+
+  async function goldNow() {
+    try {
+      const d = await gameGet('/api/game/shop');
+
+      return d && typeof d.gold === 'number' ? d.gold : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function feeLearn(g0, g1, price, cur, qty) {
+    if (g0 == null || g1 == null || cur !== 'GOLD') return;
+
+    const paid = g0 - g1;
+    const total = price * (qty || 1);
+
+    if (!(paid > 0) || !(total > 0) || paid > total * 0.5) return;
+
+    const rate = Math.round((paid / total) * 10000) / 10000;
+
+    store.set('mkFee', { rate, t: Date.now(), paid, total });
+    log('taxa de anúncio medida:', paid, 'de', total, '=', rate * 100 + '%');
+  }
+
+  function feeRender(price, cur, qty) {
+    const el = $('mtal-d-fee');
+
+    if (!el) return;
+
+    const f = feeInfo();
+    const total = (price || 0) * (qty || 1);
+
+    if (!f) {
+      el.innerHTML = '<span class="mk-dim">Taxa de anúncio: será medida no seu próximo anúncio em $.</span>';
+      return;
+    }
+
+    const pct = (f.rate * 100).toFixed(f.rate * 100 % 1 ? 1 : 0) + '%';
+
+    el.innerHTML = `Taxa de anúncio (${pct}): <b>${cur === 'DIAMONDS' ? '💎' : '$'} ${total > 0 ? fmt(Math.ceil(total * f.rate)) : '—'}</b>`;
+  }
+
+  // "editar" = cancelar e anunciar de novo com o novo preço
+  async function slReprice(h, price, cur, btn) {
+    const l = h.raw || {};
+
+    if (!(price > 0)) return toast('Preço inválido.');
+    if (!confirm('Atualizar ' + h.name + ' para ' + fmt(price) + ' ' + curLabel(cur) + (h.kind === 'pokemon' ? '' : '/un') + '?\n\nO anúncio atual será cancelado e criado de novo' + (feeInfo() ? ' (paga a taxa de novo).' : '.'))) return;
+
+    if (btn) btn.disabled = true;
+
+    const g0 = await goldNow();
+
+    try {
+      await mkAction({ action: 'cancel', id: l.id });
+    } catch (e) {
+      if (btn) btn.disabled = false;
+
+      return toast('Erro ao cancelar: ' + ((e && e.message) || e));
+    }
+
+    let ok = false;
+    let lastErr = null;
+
+    for (let i = 0; i < 4 && !ok; i++) {
+      await sleep(500 + i * 700);
+
+      try {
+        let body;
+
+        if (h.kind === 'pokemon') {
+          let cid = l.capturedId || l.pokeId || l.pokemonId;
+
+          if (!cid) {
+            try {
+              await wsSend({ type: 'pokes-get' }, ['pokes'], 3000);
+            } catch (e) {}
+
+            const all = allPokes();
+            const m = all.find(
+              (p) =>
+                +p.speciesId === +l.speciesId &&
+                (l.level == null || p.level === l.level) &&
+                (l.ivTotal == null || p.ivTotal === l.ivTotal) &&
+                (l.quality == null || Math.abs(Number(p.quality) - Number(l.quality)) < 0.001) &&
+                !p.team
+            );
+
+            cid = m && m.id;
+          }
+
+          if (!cid) throw new Error('não achei o Pokémon de volta no depósito');
+
+          body = { action: 'sell-pokemon', capturedId: cid, price, currency: cur };
+        } else {
+          body = { action: 'sell', kind: l.kind, refId: l.refId, quantity: l.quantity || h.quantity || 1, price, currency: cur };
+        }
+
+        await mkAction(body);
+        ok = true;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+
+    if (ok) {
+      feeLearn(g0, await goldNow(), price, cur, h.kind === 'pokemon' ? 1 : l.quantity || 1);
+      toast('Anúncio atualizado: ' + h.name + ' → ' + fmt(price) + ' ' + curLabel(cur));
+
+      if (detailsAnchor === 'mtal-mk') hideDetails();
+    } else {
+      toast('⚠ O anúncio foi cancelado, mas não consegui anunciar de novo: ' + ((lastErr && lastErr.message) || lastErr) + '. O item voltou para você.');
+    }
+
+    if (btn) btn.disabled = false;
+
+    slLoad();
+  }
+
   async function slSell(c, kind, price, cur, qty, btn) {
     if (!c) return;
     if (!(price > 0)) return toast('Preço inválido.');
@@ -8295,10 +8665,14 @@
 
     if (btn) btn.disabled = true;
 
+    const g0 = cur === 'GOLD' ? await goldNow() : null;
+
     try {
       await mkAction(body);
 
       toast('Anunciado: ' + msg);
+
+      if (g0 != null) goldNow().then((g1) => feeLearn(g0, g1, price, cur, body.quantity || 1));
 
       if (body.action === 'sell') {
         const own = ownedCache && ownedCache.list.find((x) => x.itemId === c.refId);
@@ -8400,7 +8774,7 @@
           return `<div class="sl-pk${key === sl.sel ? ' on' : ''}" data-key="${esc(key)}">${mkPokeCard(
             h,
             `<div class="mkc-side">
-              <div class="mk-price">${pokeOriginHtml(c)}</div>
+              <div class="mk-price"></div>
               <div class="mk-acts"><button type="button">Anunciar</button></div>
             </div>`
           )}</div>`;
@@ -8477,43 +8851,6 @@
     pseudo.forEach(ensureSprite);
 
     $('sl-hint').textContent = !poke && ownedCache ? 'Inventário lido há ' + ago(ownedCache.t) + '.' : '';
-  }
-
-  // de onde veio o Pokémon: comprado no mercado (com preço) ou capturado
-  function pokeOrigin(p) {
-    const id = String(p.id);
-
-    const bought = state.purchased.find((h) => h.kind === 'pokemon' && h.raw && String(h.raw.capturedId) === id);
-
-    if (bought) return { bought: true, price: bought.price, cur: bought.currency };
-
-    for (const x of sl.history || []) {
-      if (!x.bought) continue;
-
-      const k = seenL[seenKey(x.name, x.price, x.currency)];
-
-      if (k && k.capturedId != null && String(k.capturedId) === id) return { bought: true, price: x.price, cur: x.currency };
-    }
-
-    const base = String(p.name || '').toLowerCase();
-    const same = (sl.pokes || []).filter((q) => String(q.name || '').toLowerCase() === base && q.level === p.level);
-    const cand = (sl.history || []).filter(
-      (x) => x.bought && stripLv(x.name || '').toLowerCase() === base && levelOf(x) === p.level && !(seenL[seenKey(x.name, x.price, x.currency)] || {}).capturedId
-    );
-
-    if (cand.length && same.length === 1) return { bought: true, price: cand[0].price, cur: cand[0].currency };
-
-    return { bought: false };
-  }
-
-  function pokeOriginHtml(p) {
-    const o = pokeOrigin(p);
-
-    if (!o.bought) return '<span class="mk-dim">🎯 Capturado</span>';
-
-    const dia = o.cur === 'DIAMONDS' || o.cur === 'DIAMOND';
-
-    return `<span class="mk-dim">Comprado</span> ${dia ? '💎' : '$'} ${fmt(o.price || 0)}`;
   }
 
   function hsPokeData(x) {
@@ -8623,8 +8960,20 @@
 
       if (day !== lastDay) {
         const dayItems = list.filter((y) => dayOf(y) === day);
+        const net = (cur) =>
+          dayItems.filter((y) => (y.currency === 'DIAMONDS' || y.currency === 'DIAMOND' ? 'D' : 'G') === cur).reduce((a, y) => a + (y.bought ? -1 : 1) * (y.price || 0), 0);
+        const sg = net('G');
+        const sd = net('D');
+        const hasD = dayItems.some((y) => y.currency === 'DIAMONDS' || y.currency === 'DIAMOND');
+        const hasG = dayItems.some((y) => !(y.currency === 'DIAMONDS' || y.currency === 'DIAMOND'));
+        const fm = (v, icon) => `<b class="${v >= 0 ? 'pos' : 'neg'}">${v >= 0 ? '+' : '−'}${icon} ${fmt(Math.abs(v))}</b>`;
 
-        html += `<div class="hs-day"><span>${esc(day)}</span><small>${dayItems.length} ${dayItems.length === 1 ? 'transação' : 'transações'}</small></div>`;
+        html += `<div class="hs-day"><span>${esc(day)}</span><small>${dayItems.length} ${dayItems.length === 1 ? 'transação' : 'transações'}</small><em class="hs-dbal">${[
+          hasG ? fm(sg, '$') : '',
+          hasD ? fm(sd, '💎') : ''
+        ]
+          .filter(Boolean)
+          .join('<i>·</i>')}</em></div>`;
         lastDay = day;
       }
 
@@ -8641,14 +8990,27 @@
               .join(' · ') || 'Pokémon'
           : esc(catLabel(h.category) || 'Item') + (x.amount > 1 ? ' · ' + fmt(x.amount) + '×' : '');
 
+      if (h.kind === 'pokemon') {
+        html += `<div class="hs-pk" data-hi="${all.indexOf(x)}">${mkPokeCard(
+          h,
+          `<div class="mkc-side">
+            <span class="hs-tag ${x.bought ? 'buy' : 'sell'}">${x.bought ? 'Compra' : 'Venda'}${x.offer ? ' · oferta' : ''}</span>
+            <div class="mk-price ${x.bought ? 'neg' : 'pos'}">${x.bought ? '−' : '+'}${esc(priceTxt2(x.price || 0, x.currency))}</div>
+            <small class="mk-dim">${x.at ? esc(new Date(x.at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })) : ''}</small>
+          </div>`
+        )}</div>`;
+
+        return;
+      }
+
       html += `<div class="hs-row" data-hi="${all.indexOf(x)}">
         <div class="mtal-hit-thumb hs-th" data-hid="${h.hid}">${thumbHtml(h)}</div>
         <div class="hs-main">
           <div class="hs-name">${esc(x.name || '-')}${h.shiny ? ' ✨' : ''}</div>
           <div class="hs-sub">${sub}</div>
         </div>
-        <span class="hs-tag ${x.bought ? 'buy' : 'sell'}">${x.bought ? 'Compra' : 'Venda'}${x.offer ? ' · oferta' : ''}</span>
         <div class="hs-right">
+          <span class="hs-tag ${x.bought ? 'buy' : 'sell'}">${x.bought ? 'Compra' : 'Venda'}${x.offer ? ' · oferta' : ''}</span>
           <b class="${x.bought ? 'neg' : 'pos'}">${x.bought ? '−' : '+'}${esc(priceTxt2(x.price || 0, x.currency))}</b>
           <small>${x.at ? esc(new Date(x.at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })) : ''}</small>
         </div>
@@ -8683,6 +9045,19 @@
             sub =
               `IV <b style="color:#f2ead0">${esc(h.ivTotal)}</b>/192` +
               (rar ? ` · <span style="color:${rc}">${esc(rar)} ×${Number(h.quality).toFixed(2)}</span>` : '');
+          }
+
+          if (h.kind === 'pokemon') {
+            return `<tr class="mtal-mkrow mkc-row sl-row" data-mh="${h.hid}"><td colspan="6">${mkPokeCard(
+              h,
+              `<div class="mkc-side">
+                <div class="mk-price">${esc(hitPrice(h))}</div>
+                <div class="mk-acts">
+                  <button type="button" data-act="reprice" data-hid="${h.hid}" title="Alterar preço">✎</button>
+                  <button type="button" data-act="cancel" data-hid="${h.hid}" title="Cancelar anúncio">✕</button>
+                </div>
+              </div>`
+            )}</td></tr>`;
           }
 
           return `<tr class="sl-row" data-mh="${h.hid}">
@@ -9128,28 +9503,20 @@
 
         toast('Anúncio cancelado: ' + h.name);
       } else {
-        const v = prompt(
-          'Novo preço de ' + h.name + ' (' + curLabel(l.currency) + (h.kind === 'pokemon' ? '' : '/un') + ')',
-          String(l.price)
-        );
+        const tr = b.closest('tr[data-mh]');
 
-        if (v == null) return;
+        document.querySelectorAll('#sl-mine tr[data-mh]').forEach((r) => r.classList.toggle('on', r === tr));
+        showDetails(h, 'mtal-mk');
+        setTimeout(() => {
+          const sp = $('mtal-d-sprice');
 
-        const p = parseFloat(String(v).replace(/[.\s]/g, '').replace(',', '.'));
+          if (sp) {
+            sp.focus();
+            sp.select();
+          }
+        }, 30);
 
-        if (!(p > 0)) return toast('Preço inválido.');
-
-        b.disabled = true;
-
-        await mkAction({ action: 'cancel', id: l.id });
-
-        await mkAction(
-          h.kind === 'pokemon'
-            ? { action: 'sell-pokemon', capturedId: l.capturedId, price: p, currency: l.currency }
-            : { action: 'sell', kind: l.kind, refId: l.refId, quantity: l.quantity, price: p, currency: l.currency }
-        );
-
-        toast('Preço atualizado: ' + h.name + ' → ' + fmt(p) + ' ' + curLabel(l.currency));
+        return;
       }
     } catch (err) {
       toast('Erro: ' + ((err && err.message) || err));
@@ -9834,8 +10201,26 @@
     } else if (key === 'shop') {
       info = 'Saldo: $ ' + fmt(d.gold);
 
+      const invShop = (npcSt.data.depot && npcSt.data.depot.inventory) || [];
+      const haveOf = (x, isBall) => {
+        if (isBall) {
+          const c = wsSt.ballCounts;
+
+          return c ? +(c[x.id] || c[String(x.id)] || 0) : null;
+        }
+
+        const it = invShop.find((y) => y.id === x.id) || ((ownedCache && ownedCache.list) || []).find((y) => y.itemId === x.id);
+
+        return it ? it.quantity : npcSt.data.depot ? 0 : null;
+      };
+      const haveTxt = (x, isBall) => {
+        const n = haveOf(x, isBall);
+
+        return n == null ? '' : `<span class="npc-have${n ? '' : ' zero'}">Você tem <b>${fmt(n)}</b></span>`;
+      };
+
       const sell = (x, isBall) =>
-        npcCard(iconUrl(x.iconUrl || x.icon), x.name, '$ ' + fmt(x.priceGold), () =>
+        npcCard(iconUrl(x.iconUrl || x.icon), x.name, '$ ' + fmt(x.priceGold) + haveTxt(x, isBall), () =>
           npcHit({
             name: x.name,
             category: isBall ? 'Poke Balls' : 'Items',
