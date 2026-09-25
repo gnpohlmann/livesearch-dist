@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.4.46
+// @version      0.4.50
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -20,7 +20,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.46';
+  const VERSION = '0.4.50';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -3718,7 +3718,7 @@
       border-radius:6px
     }
 
-    #mtal-mk{position:fixed;left:16px;top:4vh;width:min(1240px,calc(100vw - 350px));min-width:760px;height:92vh;z-index:2147483646;background:#12141f;color:#e8e3d0;border:1px solid #c9a44a;border-radius:10px;font:12px/1.4 Inter,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.6);display:none;flex-direction:column;overflow:hidden}
+    #mtal-mk{position:fixed;left:16px;top:4vh;width:min(1480px,calc(100vw - 440px));min-width:760px;height:92vh;z-index:2147483646;background:#12141f;color:#e8e3d0;border:1px solid #c9a44a;border-radius:10px;font:12px/1.4 Inter,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.6);display:none;flex-direction:column;overflow:hidden}
     #mtal-mk [hidden]{display:none!important}
     #mtal-mk button{background:#252a3d;color:#e8e3d0;border:1px solid #4a4f66;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px}
     #mtal-mk button:hover{border-color:#b5934f}
@@ -3775,7 +3775,7 @@
     #mtal-mk .mkc-sort.on{background:#3d3420;border-color:#c9a44a;color:#f0d78c}
     #mtal-mk .mkc-row td{padding:4px 10px;border-bottom:none;background:transparent!important}
     #mtal-mk table.mkc-table{table-layout:fixed}
-    #mtal-mk .mkc{display:grid;grid-template-columns:64px minmax(0,1fr) 150px 150px;grid-template-areas:"sp id grade side" "sp stats stats stats";align-items:center;gap:8px 16px;padding:10px 12px;background:#1a1e30;border:1px solid #232840;border-radius:10px;white-space:normal;cursor:pointer}
+    #mtal-mk .mkc{display:grid;grid-template-columns:64px 200px 150px minmax(240px,420px) minmax(0,1fr) 120px;grid-template-areas:"sp id grade stats . side";align-items:center;gap:18px;padding:10px 12px;background:#1a1e30;border:1px solid #232840;border-radius:10px;white-space:normal;cursor:pointer}
     #mtal-mk .mkc-row:hover .mkc{border-color:#4a4f66}
     #mtal-mk .mkc-row.on .mkc{border-color:#c9a44a;background:#211f1a}
     #mtal-mk .mkc-sp{grid-area:sp;align-self:center;width:64px;height:64px;display:flex;align-items:center;justify-content:center;font-size:20px}
@@ -3794,16 +3794,21 @@
     #mtal-mk .mkc-kv b{font-size:11.5px}
     #mtal-mk .rp-ivt{color:#55e6d3}
     #mtal-mk .rp-pow{color:#f0c14b}
-    #mtal-mk .mkc-stats{grid-area:stats;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;padding-top:8px;border-top:1px solid #232840}
+    #mtal-mk .mkc-stats{grid-area:stats;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,auto);grid-auto-flow:column;gap:8px 16px}
     #mtal-mk .mkc-stats.est{opacity:.55}
     #mtal-mk .mkc-stat>div{display:flex;align-items:baseline;justify-content:space-between;font-size:10px;color:#7c829c}
     #mtal-mk .mkc-stat b{font-size:10px;letter-spacing:.04em;color:var(--c)}
     #mtal-mk .mkc-stat em{font-style:normal;font-size:11.5px;font-weight:700;color:#55e6d3}
     #mtal-mk .mkc-stat i{display:block;height:4px;margin-top:3px;background:#2c3148;border-radius:2px;overflow:hidden}
     #mtal-mk .mkc-stat u{display:block;height:100%;background:var(--c);border-radius:2px}
+    #mtal-mk .mk-res{container-type:inline-size}
+    @container (max-width: 880px){
+      #mtal-mk .mkc{grid-template-columns:64px minmax(0,1fr) 150px 110px;grid-template-areas:"sp id grade side" "sp stats stats stats";gap:8px 16px}
+      #mtal-mk .mkc-stats{grid-template-columns:repeat(3,minmax(0,1fr));padding-top:8px;border-top:1px solid #232840}
+    }
     #mtal-mk .mkc-side{grid-area:side;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
     #mtal-mk .mkc-side .mk-acts{display:flex;gap:4px;width:auto}
-    #mtal-mk .mkc-side .mk-acts button{margin-left:0}
+    #mtal-mk .mkc-side .mk-acts button{width:auto;margin-left:0;padding:0 16px;font-size:12px;font-weight:600}
     #mtal-mk .mkc-side .mk-price{font-size:13px;text-align:right;white-space:nowrap}
     #mtal-mk .mk-empty{text-align:center;color:#7c829c;padding:30px}
     #mtal-mk .mk-foot{display:flex;align-items:center;gap:10px;padding:8px 12px;border-top:1px solid #232840;color:#9aa0b8}
@@ -6343,7 +6348,7 @@
       </div>
 
       <div class="mkc-stats${est ? ' est' : ''}"${est ? ' title="Estimativa imprecisa (Nv abaixo de 15)"' : ''}>
-        ${RP_KEYS.map((k) => {
+        ${['hp', 'def', 'spd', 'atk', 'spa', 'vel'].map((k) => {
           const iv = R.ivs[k];
 
           return `<div class="mkc-stat" style="--c:${RP_COLOR[k]}">
@@ -6354,10 +6359,9 @@
       </div>
 
       <div class="mkc-side">
-        <div class="mk-price">${esc(hitPrice(h))}</div>
+        <div class="mk-price">${esc(h.offerOnly ? 'Apenas ofertas' : [currencyIcon(h.currency), fmt(h.price)].filter(Boolean).join(' '))}</div>
         <div class="mk-acts">
-          <button type="button" class="mk-mkt" data-hid="${h.hid}" title="Abrir no Market">⚖️</button>
-          ${h.buyable ? `<button type="button" class="mk-buy" data-hid="${h.hid}" title="Comprar">${h.currency === 'DIAMONDS' ? '💎' : '$'}</button>` : ''}
+          ${h.buyable ? `<button type="button" class="mk-buy" data-hid="${h.hid}" title="Comprar">Comprar</button>` : ''}
         </div>
       </div>
     </div>`;
