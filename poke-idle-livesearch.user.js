@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.4.40
+// @version      0.4.42
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -20,7 +20,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.40';
+  const VERSION = '0.4.42';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -3185,7 +3185,7 @@
     #mtal-toast-slot .mtal-toast{pointer-events:auto}
     #mtal-badge{background:#12141f;color:#f0d78c;border:1px solid #4a4f66;border-radius:6px;padding:4px 8px;margin-left:4px;font-size:11px;display:inline-flex;align-items:center;justify-content:center;line-height:1}
 
-    #mtal-panel{position:fixed;left:16px;bottom:64px;width:370px;max-height:72vh;overflow:hidden;z-index:2147483646;background:#12141f;color:#e8e3d0;border:1px solid #c9a44a;border-radius:10px;font:12px/1.4 Inter,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.6);display:none;padding:0}
+    #mtal-panel{position:fixed;left:16px;bottom:64px;width:420px;max-height:72vh;overflow:hidden;z-index:2147483646;background:#12141f;color:#e8e3d0;border:1px solid #c9a44a;border-radius:10px;font:12px/1.4 Inter,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.6);display:none;padding:0}
     #mtal-panel[style*="display: block"]{display:flex!important;flex-direction:column}
     #mtal-panel-head{flex:none;position:sticky;top:0;z-index:2;background:#12141f;padding:10px 10px 0 10px;box-shadow:0 6px 10px -6px rgba(0,0,0,.65)}
     #mtal-panel-body{flex:1;min-height:0;overflow-y:auto;padding:0 10px 10px 10px;scrollbar-width:thin}
@@ -3319,6 +3319,48 @@
     #mtal-panel .mtal-hit-sub{
       margin-top:2px;
       color:#9aa0b8
+    }
+
+    #mtal-panel .mtal-hit-lv{
+      font-size:11px;
+      font-weight:600;
+      color:#7c829c
+    }
+
+    #mtal-panel .mtal-hit-types{
+      display:flex;
+      flex-wrap:wrap;
+      gap:4px;
+      margin-top:4px
+    }
+
+    #mtal-panel .rp-type{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      height:16px;
+      padding:0 7px;
+      box-sizing:border-box;
+      border-radius:999px;
+      font-size:8.5px;
+      font-weight:800;
+      line-height:1;
+      letter-spacing:.04em;
+      text-transform:uppercase
+    }
+
+    #mtal-panel .mtal-hit-ivbar{
+      height:4px;
+      margin-top:5px;
+      background:#2c3148;
+      border-radius:2px;
+      overflow:hidden
+    }
+
+    #mtal-panel .mtal-hit-ivbar i{
+      display:block;
+      height:100%;
+      border-radius:2px
     }
 
     #mtal-panel .mtal-hit-price{
@@ -3811,6 +3853,10 @@
     #mtal-details .rp-moves.open{display:flex}
     #mtal-details .rp-move{display:flex;align-items:center;gap:8px;padding:6px 8px;background:#1a1e30;border:1px solid #232840;border-radius:8px}
     #mtal-details .rp-move .rp-type{height:18px;padding:0 8px;font-size:9px}
+    #mtal-panel .rp-type,#mtal-details .rp-type{padding-top:1px!important}
+    @supports (text-box: trim-both cap alphabetic){
+      #mtal-panel .rp-type,#mtal-details .rp-type{padding-top:0!important;text-box:trim-both cap alphabetic}
+    }
     #mtal-details .rp-move b{font-size:12px;color:#f2ead0}
     #mtal-details .rp-move small{font-size:10.5px;color:#7c829c}
     #mtal-details .rp-move em{margin-left:auto;font-style:normal;font-weight:700;color:#ff9f43}
@@ -4441,7 +4487,50 @@
   }
 
   /* ---------- ACHADOS ---------- */
+  function hitMiniThumb(h) {
+    if (h.kind !== 'pokemon') return null;
+
+    const sp = rpSprite(h, rpCreature(h));
+
+    return sp
+      ? `<img src="${esc(sp.anim)}" data-fb="${esc(sp.still)}" onerror="if(this.dataset.fb){this.src=this.dataset.fb;this.dataset.fb=''}else{this.parentElement.textContent='❔'}">`
+      : null;
+  }
+
+  function hitMiniDesc(h) {
+    const r = h.raw || {};
+    const c = rpCreature(h);
+    let types = typesOf(r);
+
+    if (!types.length && c) types = [c.type1, c.type2].filter(Boolean);
+
+    const lvl = levelOf({ ...r, name: h.name });
+    const rar = rarityOf(h);
+    const rc = (rar && RARITY_COLOR[String(rar).toLowerCase()]) || '#e0b95a';
+    const pct = h.ivTotal != null ? (Number(h.ivTotal) / 192) * 100 : null;
+    const cls = pct != null ? RP_CLASS.find((x) => pct >= x[0]) : null;
+
+    return (
+      `<div class="mtal-hit-name">${esc(stripLv(h.name))}${h.shiny ? ' ✨' : ''}${
+        lvl != null ? ` <span class="mtal-hit-lv">Nv ${esc(lvl)}</span>` : ''
+      }</div>` +
+      (types.length ? `<div class="mtal-hit-types">${types.map((t) => rpTypeBadge(t, true)).join('')}</div>` : '') +
+      `<div class="mtal-hit-sub">IV <span style="color:#f2ead0">${esc(h.ivTotal != null ? h.ivTotal : '-')}</span>/192` +
+      (rar ? ` · <span style="color:${rc}">${esc(rar)}${h.quality != null ? ' ×' + Number(h.quality).toFixed(2) : ''}</span>` : '') +
+      `</div>` +
+      (cls
+        ? `<div class="mtal-hit-ivbar" title="${Math.round(pct)}% · ${esc(cls[1])}"><i style="width:${Math.min(100, pct)}%;background:${cls[2]}"></i></div>`
+        : '')
+    );
+  }
+
   function renderHits() {
+    if (!rpCre && hits.some((h) => h.kind === 'pokemon')) {
+      rpLoadCreatures().then((ok) => {
+        if (ok) renderHits();
+      });
+    }
+
     const t = (ms) =>
       new Date(ms).toLocaleTimeString(
         'pt-BR'
@@ -4461,7 +4550,7 @@
               class="mtal-hit-thumb"
               data-hid="${h.hid}"
             >
-              ${thumbHtml(h)}
+              ${hitMiniThumb(h) || thumbHtml(h)}
             </div>
 
             <div
@@ -4478,7 +4567,7 @@
 
           <div class="mtal-hit-main">
             <div class="mtal-hit-desc">
-              ${hitDesc(h)}
+              ${h.kind === 'pokemon' ? hitMiniDesc(h) : hitDesc(h)}
             </div>
 
             <div class="mtal-hit-price">
@@ -4524,7 +4613,7 @@
           </div>
         `;
 
-    hits.forEach(
+    hits.filter((h) => !hitMiniThumb(h)).forEach(
       ensureSprite
     );
   }
