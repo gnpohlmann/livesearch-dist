@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.4.57
+// @version      0.4.61
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -20,7 +20,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.57';
+  const VERSION = '0.4.61';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -506,11 +506,19 @@
     });
   }
 
+  function speciesIdsOf(a) {
+    if (Array.isArray(a.species) && a.species.length) return a.species.map((x) => +x.speciesId);
+
+    return a.speciesId ? [+a.speciesId] : [];
+  }
+
   function queryOf(a) {
     if (a.kind === 'pokemon') {
       let q = '?browse=pokemon&page=1&sort=recent';
 
-      if (a.speciesId) q += '&speciesId=' + a.speciesId;
+      const ids = speciesIdsOf(a);
+
+      if (ids.length === 1) q += '&speciesId=' + ids[0];
       if (a.ivMin) q += '&ivMin=' + a.ivMin;
       if (a.qMin) q += '&qMin=' + a.qMin;
 
@@ -531,7 +539,9 @@
 
   function matches(a, l) {
     if (a.kind === 'pokemon') {
-      if (a.speciesId && l.speciesId !== a.speciesId) return false;
+      const ids = speciesIdsOf(a);
+
+      if (ids.length && !ids.includes(+l.speciesId)) return false;
       if (a.ivMin && !(l.ivTotal >= a.ivMin)) return false;
       if (a.qMin && !(l.quality >= a.qMin)) return false;
       if (a.shinyOnly && !l.shiny) return false;
@@ -1425,6 +1435,126 @@
       '→',
       text
     );
+
+    autoBuyHit(a, hit);
+  }
+
+  let cpopDone = null;
+  let cpopFinish = null;
+
+  function confirmPop(anchor, detail) {
+    if (cpopDone) cpopDone(false);
+    if (cpopFinish) cpopFinish(false);
+
+    let el = $('mtal-cpop');
+
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'mtal-cpop';
+      document.body.appendChild(el);
+    }
+
+    el.innerHTML = `
+      <button type="button" class="cp-x" title="Cancelar">✕</button>
+      <b>Confirmar compra?</b>
+      ${detail ? `<small>${esc(detail)}</small>` : ''}
+      <button type="button" class="cp-ok">Confirmar</button>
+      <i class="cp-arrow"></i>`;
+    el.style.display = 'flex';
+    el.style.visibility = 'hidden';
+
+    const card = (anchor && anchor.closest('.mtal-hit, .mkc, .mkc-row, .mkc-cell')) || anchor;
+    const panel = anchor && anchor.closest('#mtal-panel');
+    const cr = card.getBoundingClientRect();
+    const w = el.offsetWidth;
+    const hgt = el.offsetHeight;
+    const gap = 10;
+    let side = 'r';
+    let x;
+
+    if (panel) {
+      const pr = panel.getBoundingClientRect();
+
+      x = pr.right + gap;
+
+      if (x + w > innerWidth - 8) {
+        x = pr.left - gap - w;
+        side = 'l';
+      }
+    } else {
+      x = cr.right + gap;
+
+      if (x + w > innerWidth - 8) {
+        x = cr.left - gap - w;
+        side = 'l';
+      }
+    }
+
+    const cy = cr.top + cr.height / 2;
+    const y = Math.max(8, Math.min(innerHeight - hgt - 8, cy - hgt / 2));
+
+    el.style.left = Math.max(8, x) + 'px';
+    el.style.top = y + 'px';
+    el.className = side;
+    el.querySelector('.cp-arrow').style.top = Math.max(12, Math.min(hgt - 12, cy - y)) + 'px';
+    el.style.visibility = '';
+    card.classList.add('mtal-confirming');
+
+    return new Promise((res) => {
+      const close = () => {
+        el.style.display = 'none';
+        card.classList.remove('mtal-confirming');
+      };
+      const done = (v) => {
+        cpopDone = null;
+        document.removeEventListener('mousedown', outside, true);
+        document.removeEventListener('keydown', key, true);
+
+        if (!v) {
+          close();
+          return res(false);
+        }
+
+        const ok = el.querySelector('.cp-ok');
+
+        ok.disabled = true;
+        ok.textContent = 'Comprando…';
+        el.querySelector('.cp-x').style.display = 'none';
+
+        cpopFinish = (bought) => {
+          cpopFinish = null;
+
+          if (!bought) return close();
+
+          ok.classList.add('done');
+          ok.textContent = 'Comprado ✓';
+          setTimeout(() => {
+            if (!cpopDone && !cpopFinish) close();
+          }, 1000);
+        };
+
+        res(true);
+      };
+      const outside = (e) => {
+        if (!el.contains(e.target) && !(anchor && anchor.contains(e.target))) done(false);
+      };
+      const key = (e) => {
+        if (e.key === 'Escape') done(false);
+        else if (e.key === 'Enter') {
+          e.preventDefault();
+          done(true);
+        }
+      };
+
+      cpopDone = done;
+      el.querySelector('.cp-ok').onclick = () => done(true);
+      el.querySelector('.cp-x').onclick = () => done(false);
+      setTimeout(() => {
+        document.addEventListener('mousedown', outside, true);
+        document.addEventListener('keydown', key, true);
+      }, 0);
+      el.querySelector('.cp-ok').focus();
+    });
   }
 
   async function handleBuyClick(
@@ -1501,13 +1631,7 @@
         return;
       }
     } else if (
-      !confirm(
-        'Comprar ' +
-          h.name +
-          ' por ' +
-          priceTxt +
-          '?'
-      )
+      !(await confirmPop(btn, h.name + ' · ' + priceTxt))
     ) {
       return;
     }
@@ -1527,61 +1651,12 @@
           qty
         );
 
-      toast(
-        'Comprado: ' +
-          (res.name || h.name) +
-          (res.total != null
-            ? ' · saldo: ' +
-              fmt(res.total) +
-              ' ' +
-              curLabel(res.currency)
-            : '')
-      );
+      recordPurchase(h, res, 'Comprado: ');
 
-      const idx =
-        hits.findIndex(
-          (x) => x.hid === hid
-        );
-
-      if (idx >= 0) {
-        hits.splice(idx, 1);
-      }
-
-      const mi =
-        mk.rows.findIndex(
-          (x) => x.hid === hid
-        );
-
-      if (mi >= 0) {
-        mk.rows.splice(mi, 1);
-        mkRender();
-      }
-
-      rememberListings([h.raw]);
-
-      state.purchased.unshift({
-        ...h,
-        purchasedAt: Date.now()
-      });
-
-      if (
-        state.purchased.length >
-        MAX_PURCHASED
-      ) {
-        state.purchased.length =
-          MAX_PURCHASED;
-      }
-
-      save();
-      renderHits();
-
-      if (
-        activeTab ===
-        'purchased'
-      ) {
-        renderPurchased();
-      }
+      if (cpopFinish) cpopFinish(true);
     } catch (e) {
+      if (cpopFinish) cpopFinish(false);
+
       toast(
         'Erro ao comprar: ' +
           ((e && e.message) || e)
@@ -1590,6 +1665,84 @@
       btn.disabled = false;
       btn.textContent =
         original;
+    }
+  }
+
+  function recordPurchase(h, res, label) {
+    const hid = h.hid;
+
+    toast(
+      label +
+        (res.name || h.name) +
+        (res.total != null
+          ? ' · saldo: ' +
+            fmt(res.total) +
+            ' ' +
+            curLabel(res.currency)
+          : '')
+    );
+
+    const idx =
+      hits.findIndex(
+        (x) => x.hid === hid
+      );
+
+    if (idx >= 0) {
+      hits.splice(idx, 1);
+    }
+
+    const mi =
+      mk.rows.findIndex(
+        (x) => x.hid === hid
+      );
+
+    if (mi >= 0) {
+      mk.rows.splice(mi, 1);
+      mkRender();
+    }
+
+    rememberListings([h.raw]);
+
+    state.purchased.unshift({
+      ...h,
+      purchasedAt: Date.now()
+    });
+
+    if (
+      state.purchased.length >
+      MAX_PURCHASED
+    ) {
+      state.purchased.length =
+        MAX_PURCHASED;
+    }
+
+    save();
+    renderHits();
+
+    if (
+      activeTab ===
+      'purchased'
+    ) {
+      renderPurchased();
+    }
+  }
+
+  async function autoBuyHit(a, h) {
+    if (!a.autoBuy || !state.on || !h.buyable || h.autoBuying) return;
+    if (a.maxPrice == null || !a.currency || h.currency !== a.currency || !(h.price <= a.maxPrice)) return;
+
+    h.autoBuying = true;
+
+    const qty = h.kind === 'pokemon' ? 1 : Math.max(1, h.quantity || 1);
+
+    try {
+      const res = await buyListing(h.id, qty);
+
+      recordPurchase(h, res || {}, '⚡ Auto-compra: ');
+      log('AUTO-COMPRA', a.name, '→', h.name, qty);
+    } catch (e) {
+      h.autoBuying = false;
+      toast('Auto-compra falhou (' + h.name + '): ' + ((e && e.message) || e));
     }
   }
 
@@ -2003,7 +2156,8 @@
               name: String(name),
               power: pick(s, ['power', 'basePower', 'damage', 'dmg']),
               type: pick(s, ['type', 'element']),
-              lvl: pick(s, ['learnLevel', 'level', 'lvl'])
+              lvl: pick(s, ['learnLevel', 'level', 'lvl']),
+              cat: pick(s, ['category', 'damageClass', 'damage_class', 'moveClass', 'class', 'attackType', 'kind'])
             }
           : null;
       })
@@ -3220,7 +3374,22 @@
 
     #mtal-panel{position:fixed;left:16px;bottom:64px;width:620px;max-height:72vh;overflow:hidden;z-index:2147483646;background:#12141f;color:#e8e3d0;border:1px solid #c9a44a;border-radius:10px;font:12px/1.4 Inter,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.6);display:none;padding:0}
     #mtal-panel[style*="display: block"]{display:flex!important;flex-direction:column}
-    #mtal-panel-head{flex:none;position:sticky;top:0;z-index:2;background:#12141f;padding:10px 10px 0 10px;box-shadow:0 6px 10px -6px rgba(0,0,0,.65)}
+    #mtal-panel-head{flex:none;max-height:calc(72vh - 30px);overflow-y:auto;scrollbar-width:thin;position:sticky;top:0;z-index:2;background:#12141f;padding:10px 10px 0 10px;box-shadow:0 6px 10px -6px rgba(0,0,0,.65)}
+    #mtal-panel-head::-webkit-scrollbar{width:3px}
+    #mtal-cpop{position:fixed;z-index:2147483647;display:none;flex-direction:column;align-items:stretch;gap:6px;width:190px;box-sizing:border-box;padding:12px 12px 12px;background:#12141f;color:#e8e3d0;border:1px solid #3a4060;border-radius:10px;box-shadow:0 10px 28px rgba(0,0,0,.6);font:12px/1.35 Inter,sans-serif}
+    #mtal-cpop b{padding-right:18px;font-size:13px;color:#f2ead0}
+    #mtal-cpop small{font-size:11px;color:#9aa0b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    #mtal-cpop button{font:inherit;cursor:pointer}
+    #mtal-cpop .cp-ok{margin-top:4px;height:30px;background:#e8eaf2;border:1px solid #e8eaf2;border-radius:6px;color:#12141f;font-weight:700}
+    #mtal-cpop .cp-ok:hover{background:#fff}
+    #mtal-cpop .cp-ok:disabled{cursor:default;opacity:.8}
+    #mtal-cpop .cp-ok.done,#mtal-cpop .cp-ok.done:hover{opacity:1;background:#2ecc71;border-color:#2ecc71;color:#fff}
+    #mtal-cpop .cp-x{position:absolute;top:8px;right:8px;width:20px;height:20px;padding:0;display:grid;place-items:center;background:transparent;border:none;border-radius:50%;color:#7c829c;font-size:10px}
+    #mtal-cpop .cp-x:hover{background:#262b3f;color:#fff}
+    #mtal-cpop .cp-arrow{position:absolute;width:10px;height:10px;margin-top:-5px;background:#12141f;border:1px solid #3a4060;transform:rotate(45deg)}
+    #mtal-cpop.r .cp-arrow{left:-6px;border-top:none;border-right:none}
+    #mtal-cpop.l .cp-arrow{right:-6px;border-bottom:none;border-left:none}
+    .mtal-confirming{outline:1px solid #e8eaf2;outline-offset:-1px}
     #mtal-panel-body{flex:1;min-height:0;overflow-y:auto;padding:0 10px 10px 10px;scrollbar-width:thin}
     #mtal-panel-body::-webkit-scrollbar{width:3px}
     #mtal-footer{flex:none;text-align:center;padding:6px 10px;font-size:10px;letter-spacing:.03em;color:#9aa0b8;border-top:1px solid #232840;background:#12141f}
@@ -3260,6 +3429,7 @@
     #mtal-panel .mtal-dot{display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;vertical-align:1px;background:#7c829c}
     #mtal-panel .mtal-dot.ok{background:#61f6a4}
     #mtal-panel .mtal-dot.err{background:#f39a4b}
+    #mtal-panel .mtal-autob{margin-left:6px;padding:1px 6px;border-radius:999px;background:#2a2410;border:1px solid #6b5a1f;color:#f0c14b;font-size:9.5px;font-weight:700;vertical-align:1px}
     #mtal-panel .mtal-ib{width:28px;height:28px;padding:0;background:transparent;border-color:transparent;color:#9aa0b8;font-size:13px}
     #mtal-panel .mtal-ib:hover{border-color:#4a4f66;color:#fff}
     #mtal-panel .mtal-ib.del:hover{color:#ff6b6b}
@@ -3279,10 +3449,10 @@
       align-items:center;
       gap:10px;
       padding:10px;
-      border-left:3px solid #e0b95a;
+      border:1px solid #232840;
       background:#1a1e30;
       margin-bottom:6px;
-      border-radius:0 6px 6px 0;
+      border-radius:8px;
       min-height:108px
     }
 
@@ -3455,7 +3625,9 @@
     #mtal-panel .lsp-kv{font-size:10px;color:#7c829c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     #mtal-panel .lsp-kv b{font-size:11px}
     #mtal-panel .lsp-ivt{color:#55e6d3}
-    #mtal-panel .lsp-pow{color:#f0c14b}
+    #mtal-panel .lsp-atk.F{color:#ff9f43}
+    #mtal-panel .lsp-atk.E{color:#7aa2ff}
+    #mtal-panel .mtal-hit.lsp.myth{background:linear-gradient(90deg,rgba(214,48,64,.26),rgba(214,48,64,.08) 55%,#1a1e30);border-color:rgba(235,80,95,.55);box-shadow:inset 0 0 18px rgba(214,48,64,.12)}
     #mtal-panel .lsp-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,auto);grid-auto-flow:column;gap:7px 8px}
     #mtal-panel .lsp-stats.est{opacity:.55}
     #mtal-panel .lsp-stat>div{display:flex;align-items:baseline;justify-content:space-between;gap:4px}
@@ -3545,6 +3717,20 @@
     #mtal-form label > span{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#7c829c}
     #mtal-form input[type=text],#mtal-form input[type=number],#mtal-form select{width:100%;height:32px;box-sizing:border-box;margin:0;padding:0 10px;background:#0d0f18;color:#e8e3d0;border:1px solid #2c3148;border-radius:6px;font-size:12px}
     #mtal-form input:focus,#mtal-form select:focus{outline:none;border-color:#e8eaf2}
+    #mtal-form .mtal-fspecies{position:relative;display:flex;flex-direction:column;gap:5px}
+    #mtal-form .mtal-fspecies > span{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#7c829c}
+    #mtal-form .mtal-chipbox{display:flex;flex-wrap:wrap;align-items:center;gap:5px;min-height:32px;box-sizing:border-box;padding:4px 6px;background:#0d0f18;border:1px solid #2c3148;border-radius:6px;cursor:text}
+    #mtal-form .mtal-chipbox:focus-within{border-color:#e8eaf2}
+    #mtal-form #f-chips{display:contents}
+    #mtal-form .mtal-chip{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 4px 0 9px;background:#262b3f;border:1px solid #3a4060;border-radius:999px;font-size:11.5px;color:#f2ead0;white-space:nowrap}
+    #mtal-panel #mtal-form .mtal-chip button{width:16px;height:16px;padding:0;display:grid;place-items:center;background:transparent;border:none;border-radius:50%;color:#9aa0b8;font-size:9px;line-height:1}
+    #mtal-panel #mtal-form .mtal-chip button:hover{background:#ff6b6b;color:#fff}
+    #mtal-form .mtal-chipbox input[type=text]{flex:1;min-width:120px;width:auto;height:22px;padding:0 4px;background:transparent;border:none}
+    #mtal-form .mtal-ac{position:absolute;left:0;right:0;top:100%;z-index:5;margin-top:4px;max-height:220px;overflow:auto;background:#1a1e30;border:1px solid #3a4060;border-radius:6px;box-shadow:0 8px 20px rgba(0,0,0,.5)}
+    #mtal-form .mtal-ac-opt{display:flex;justify-content:space-between;padding:7px 10px;font-size:12px;color:#e8e3d0;cursor:pointer}
+    #mtal-form .mtal-ac-opt small{color:#7c829c}
+    #mtal-form .mtal-ac-opt.on,#mtal-form .mtal-ac-opt:hover{background:#e8eaf2;color:#12141f}
+    #mtal-form .mtal-ac-opt.on small,#mtal-form .mtal-ac-opt:hover small{color:#4a4f66}
     #mtal-form .mtal-fhint{margin-top:10px;font-size:10.5px;color:#7c829c}
     #mtal-form .mtal-form-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
     #mtal-form .mtal-form-actions button{height:32px;padding:0 16px}
@@ -4191,10 +4377,14 @@
             </label>
 
             <div id="f-poke" class="mtal-fsub">
-              <label class="full">
-                <span>Espécie</span>
-                <input type="text" id="f-species" list="mtal-species" placeholder="Qualquer espécie">
-              </label>
+              <div class="full mtal-fspecies">
+                <span>Espécies</span>
+                <div class="mtal-chipbox" id="f-chipbox">
+                  <div id="f-chips"></div>
+                  <input type="text" id="f-species" autocomplete="off" placeholder="Qualquer espécie — digite para buscar">
+                </div>
+                <div class="mtal-ac" id="f-ac" hidden></div>
+              </div>
 
               <datalist id="mtal-species"></datalist>
 
@@ -4205,7 +4395,7 @@
 
               <label>
                 <span>Qualidade mín</span>
-                <input type="number" id="f-q" step="0.01" min="0" placeholder="sem mínimo">
+                <input type="text" id="f-q" inputmode="numeric" autocomplete="off" placeholder="ex.: 1.77">
               </label>
             </div>
 
@@ -4231,7 +4421,7 @@
 
             <label>
               <span>Preço máximo</span>
-              <input type="number" id="f-price" min="0" placeholder="sem limite">
+              <input type="text" id="f-price" inputmode="decimal" autocomplete="off" placeholder="sem limite">
             </label>
 
             <label>
@@ -4244,6 +4434,14 @@
                 <input type="checkbox" id="f-shiny">
                 <i></i>
                 Só shiny ✨
+              </label>
+            </div>
+
+            <div class="full">
+              <label class="mtal-sw" title="Compra sozinho o anúncio que bater com este filtro (exige preço máximo e moeda)">
+                <input type="checkbox" id="f-auto">
+                <i></i>
+                Comprar automático ⚡
               </label>
             </div>
           </div>
@@ -4619,7 +4817,25 @@
     );
   }
 
-  function lsPokeCard(h, time) {
+  const RP_SPECIAL_TYPES = new Set(['fire', 'water', 'grass', 'electric', 'psychic', 'ice', 'dragon', 'dark']);
+
+  function rpAtkKind(v) {
+    const ms = rpMoves(v.c).filter((m) => +m.power > 0);
+
+    if (!ms.length) return null;
+
+    const un = ms.filter((m) => m.lvl == null || !Number.isFinite(+v.level) || +m.lvl <= +v.level);
+    const best = (un.length ? un : ms).reduce((a, b) => (+b.power > +a.power ? b : a));
+    const c = String(best.cat || '').toLowerCase();
+    let kind = /phys|f[ií]s/.test(c) ? 'F' : /spec|esp/.test(c) ? 'E' : null;
+    const inferred = !kind;
+
+    if (!kind) kind = RP_SPECIAL_TYPES.has(String(best.type || '').toLowerCase()) ? 'E' : 'F';
+
+    return { kind, move: best, inferred };
+  }
+
+  function lsPokeCard(h, time, purchased) {
     const v = rpInit(h);
     const R = rpCompute(v);
     const r = h.raw || {};
@@ -4631,8 +4847,10 @@
     const rc = (rar && RARITY_COLOR[String(rar).toLowerCase()]) || '#e0b95a';
     const cls = R.cls || [0, '-', '#6b7089', ''];
     const est = R.est && v.level < 15;
+    const atk = rpAtkKind(v);
+    const myth = /^(m[ií]tic|mythic)/i.test(String(rar || ''));
 
-    return `<div class="mtal-hit lsp" data-hid="${h.hid}">
+    return `<div class="mtal-hit lsp${myth ? ' myth' : ''}" data-hid="${h.hid}">
       <div class="lsp-sp">
         <div class="mtal-hit-thumb" data-hid="${h.hid}">${hitMiniThumb(h) || thumbHtml(h)}</div>
         <div class="mtal-hit-date">${time}</div>
@@ -4651,7 +4869,7 @@
         <div>
           <div class="lsp-cls" style="color:${cls[2]}" title="${esc(cls[1])}">${esc(cls[1])}</div>
           <div class="lsp-kv">IV <b class="lsp-ivt">${R.ivTotal != null ? esc(R.ivTotal) : '-'}</b>/192</div>
-          <div class="lsp-kv">Poder est. <b class="lsp-pow">${R.power != null ? fmt(Math.round(R.power)) : '-'}</b></div>
+          <div class="lsp-kv"${atk ? ` title="Golpe mais forte: ${esc(atk.move.name)} (${esc(atk.move.power)})${atk.inferred ? ' · categoria estimada pelo tipo' : ''}"` : ''}>Ataque <b class="lsp-atk ${atk ? atk.kind : ''}">${atk ? (atk.kind === 'E' ? 'Especial' : 'Físico') : '-'}</b></div>
         </div>
       </div>
 
@@ -4668,8 +4886,11 @@
       </div>
 
       <div class="mtal-hit-actions lsp-acts">
-        <button type="button" class="mtal-view${h.hid === detailsHid ? ' active' : ''}" data-hid="${h.hid}" title="Detalhes">${EYE_SVG}</button>
-        ${h.buyable ? `<button type="button" class="mtal-buy" data-hid="${h.hid}" title="Comprar">🛒</button>` : ''}
+        ${purchased
+          ? `<button type="button" class="mtal-view mtal-view-p${h.hid === detailsHid ? ' active' : ''}" data-hid="${h.hid}" title="Detalhes">${EYE_SVG}</button>
+        <button type="button" class="mtal-mkt" data-hid="${h.hid}" title="Abrir no Market">⚖️</button>`
+          : `<button type="button" class="mtal-view${h.hid === detailsHid ? ' active' : ''}" data-hid="${h.hid}" title="Detalhes">${EYE_SVG}</button>
+        ${h.buyable ? `<button type="button" class="mtal-buy" data-hid="${h.hid}" title="Comprar">🛒</button>` : ''}`}
       </div>
     </div>`;
   }
@@ -4783,11 +5004,17 @@
         'pt-BR'
       );
 
+    if (!rpCre && state.purchased.some((h) => h.kind === 'pokemon')) {
+      rpLoadCreatures().then((ok) => {
+        if (ok) renderPurchased();
+      });
+    }
+
     $('mtal-purchased').innerHTML =
       state.purchased.length
         ? state.purchased
             .map(
-              (h) => `
+              (h) => h.kind === 'pokemon' ? lsPokeCard(h, t(h.purchasedAt || h.t), true) : `
         <div
           class="mtal-hit"
           data-hid="${h.hid}"
@@ -4925,7 +5152,7 @@
 
               <div class="mtal-row-body">
                 <b>
-                  ${esc(a.name)}
+                  ${esc(a.name)}${a.autoBuy ? ' <span class="mtal-autob" title="Compra automática">⚡ auto</span>' : ''}
                 </b>
 
                 <div class="mtal-sub">
@@ -5007,6 +5234,24 @@
     return undefined;
   }
 
+  function priceFmt(v) {
+    v = String(v || '').replace(/[^\d,]/g, '');
+
+    const i = v.indexOf(',');
+    let int = (i >= 0 ? v.slice(0, i) : v).replace(/^0+(?=\d)/, '');
+    const dec = i >= 0 ? v.slice(i + 1).replace(/,/g, '').slice(0, 2) : null;
+
+    int = int.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+
+    return dec != null ? (int || '0') + ',' + dec : int;
+  }
+
+  function priceParse(v) {
+    const n = parseFloat(String(v || '').replace(/\./g, '').replace(',', '.'));
+
+    return Number.isFinite(n) ? n : null;
+  }
+
   const num = (id) => {
     const v =
       parseFloat(
@@ -5027,8 +5272,12 @@
     if (
       a.kind === 'pokemon'
     ) {
+      const nm = Array.isArray(a.species) && a.species.length > 2
+        ? a.species.slice(0, 2).map((x) => x.name).join(', ') + ' +' + (a.species.length - 2)
+        : a.speciesName;
+
       bits.push(
-        a.speciesName ||
+        nm ||
           'Pokémon'
       );
 
@@ -5086,6 +5335,66 @@
     return bits.join(
       ' '
     );
+  }
+
+  let formSpecies = [];
+  let acIdx = 0;
+
+  function renderChips() {
+    $('f-chips').innerHTML = formSpecies
+      .map((x, i) => `<span class="mtal-chip">${esc(x.name)}<button type="button" data-rm="${i}" title="Remover">✕</button></span>`)
+      .join('');
+    $('f-species').placeholder = formSpecies.length ? 'Adicionar outra…' : 'Qualquer espécie — digite para buscar';
+  }
+
+  function addSpecies(sp) {
+    if (!sp || formSpecies.some((x) => +x.speciesId === +sp.speciesId)) return;
+
+    formSpecies.push({ speciesId: +sp.speciesId, name: sp.name });
+    renderChips();
+  }
+
+  function acMatches(txt) {
+    txt = String(txt || '').trim().toLowerCase();
+
+    if (!txt) return [];
+
+    const list = (species || []).filter((x) => !formSpecies.some((y) => +y.speciesId === +x.speciesId));
+    const starts = list.filter((x) => x.name.toLowerCase().startsWith(txt));
+    const inc = list.filter((x) => !x.name.toLowerCase().startsWith(txt) && x.name.toLowerCase().includes(txt));
+    const out = starts.concat(inc).slice(0, 8);
+
+    if (!out.length && /^\d+$/.test(txt)) out.push({ speciesId: +txt, name: '#' + txt });
+
+    return out;
+  }
+
+  function acHide() {
+    $('f-ac').hidden = true;
+    $('f-ac').innerHTML = '';
+  }
+
+  function acRender() {
+    const m = acMatches($('f-species').value);
+
+    if (!m.length) return acHide();
+
+    acIdx = Math.min(acIdx, m.length - 1);
+    $('f-ac').innerHTML = m
+      .map((x, i) => `<div class="mtal-ac-opt${i === acIdx ? ' on' : ''}" data-i="${i}">${esc(x.name)}<small>#${esc(x.speciesId)}</small></div>`)
+      .join('');
+    $('f-ac').hidden = false;
+  }
+
+  function acPick(i) {
+    const m = acMatches($('f-species').value);
+
+    if (!m[i]) return;
+
+    addSpecies(m[i]);
+    $('f-species').value = '';
+    acHide();
+    $('f-species').focus();
   }
 
   let editingId = null;
@@ -5171,19 +5480,17 @@
       a.kind ===
         'items';
 
-    $('f-species')
-      .value =
-      isPoke &&
-      a.speciesId
-        ? String(
-            a.speciesName ||
-              ''
-          )[0] === '#'
-          ? String(
-              a.speciesId
-            )
-          : a.speciesName
-        : '';
+    formSpecies = !isPoke
+      ? []
+      : Array.isArray(a.species) && a.species.length
+        ? a.species.map((x) => ({ speciesId: +x.speciesId, name: x.name }))
+        : a.speciesId
+          ? [{ speciesId: +a.speciesId, name: a.speciesName || '#' + a.speciesId }]
+          : [];
+
+    $('f-species').value = '';
+    renderChips();
+    acHide();
 
     $('f-iv').value =
       isPoke &&
@@ -5217,10 +5524,12 @@
       isItem &&
       !!a.belowNpc;
 
+    $('f-auto').checked = !!(a && a.autoBuy);
+
     $('f-price').value =
       a &&
       a.maxPrice != null
-        ? a.maxPrice
+        ? priceFmt(String(a.maxPrice).replace('.', ','))
         : '';
 
     $('f-cur').value =
@@ -5731,6 +6040,80 @@
 
   $('f-x').addEventListener('click', () => $('f-cancel').click());
 
+  $('f-price').addEventListener('input', (e) => {
+    const el = e.target;
+    const before = el.value.slice(0, el.selectionStart).replace(/[^\d,]/g, '').length;
+
+    el.value = priceFmt(el.value);
+
+    let pos = 0;
+
+    for (let n = 0; pos < el.value.length && n < before; pos++) {
+      if (/[\d,]/.test(el.value[pos])) n++;
+    }
+
+    try {
+      el.setSelectionRange(pos, pos);
+    } catch (err) {}
+  });
+
+  $('f-q').addEventListener('input', (e) => {
+    const d = e.target.value.replace(/\D/g, '').slice(0, 3);
+
+    e.target.value = d.length > 1 ? d[0] + '.' + d.slice(1) : d;
+  });
+
+  $('f-species').addEventListener('input', () => {
+    acIdx = 0;
+    if (!species) loadSpecies();
+    acRender();
+  });
+
+  $('f-species').addEventListener('keydown', (e) => {
+    const open = !$('f-ac').hidden;
+    const n = $('f-ac').children.length;
+
+    if (e.key === 'ArrowDown' && open) {
+      e.preventDefault();
+      acIdx = (acIdx + 1) % n;
+      acRender();
+    } else if (e.key === 'ArrowUp' && open) {
+      e.preventDefault();
+      acIdx = (acIdx - 1 + n) % n;
+      acRender();
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      if (open) {
+        e.preventDefault();
+        acPick(acIdx);
+      }
+    } else if (e.key === 'Escape') {
+      acHide();
+    } else if (e.key === 'Backspace' && !e.target.value && formSpecies.length) {
+      formSpecies.pop();
+      renderChips();
+    }
+  });
+
+  $('f-species').addEventListener('blur', () => setTimeout(acHide, 150));
+  $('f-ac').addEventListener('mousedown', (e) => {
+    const o = e.target.closest('[data-i]');
+
+    if (o) {
+      e.preventDefault();
+      acPick(+o.dataset.i);
+    }
+  });
+  $('f-chipbox').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-rm]');
+
+    if (b) {
+      formSpecies.splice(+b.dataset.rm, 1);
+      renderChips();
+    }
+
+    $('f-species').focus();
+  });
+
   $('f-kind')
     .addEventListener(
       'change',
@@ -6018,7 +6401,7 @@
             : true,
 
           maxPrice:
-            num('f-price'),
+            priceParse($('f-price').value),
 
           currency:
             null
@@ -6033,37 +6416,31 @@
             null;
         }
 
+        a.autoBuy = $('f-auto').checked;
+
+        if (a.autoBuy && (a.maxPrice == null || !a.currency)) {
+          return toast('Comprar automático: defina o preço máximo e a moeda.');
+        }
+
         if (
           kind ===
           'pokemon'
         ) {
-          const txt =
-            $('f-species')
-              .value;
+          const txt = $('f-species').value;
 
-          const sp =
-            resolveSpecies(
-              txt
-            );
+          if (txt.trim()) {
+            const sp = resolveSpecies(txt) || acMatches(txt)[0];
 
-          if (
-            txt.trim() &&
-            !sp
-          ) {
-            return toast(
-              'Espécie não encontrada: escolha uma da lista.'
-            );
+            if (!sp) {
+              return toast('Espécie não encontrada: escolha uma da lista.');
+            }
+
+            addSpecies(sp);
           }
 
-          a.speciesId =
-            sp
-              ? sp.speciesId
-              : null;
-
-          a.speciesName =
-            sp
-              ? sp.name
-              : '';
+          a.species = formSpecies.slice();
+          a.speciesId = formSpecies.length === 1 ? formSpecies[0].speciesId : null;
+          a.speciesName = formSpecies.map((x) => x.name).join(', ');
 
           a.ivMin =
             num('f-iv');
@@ -7092,6 +7469,18 @@
     if (body.action === 'sell-pokemon') setTimeout(slRenderOwned, 1500);
   }
 
+  function slNotListed(c) {
+    const mine = sl.mine || [];
+
+    if (sl.kind === 'pokemon') {
+      if (c.listed || c.onMarket || c.inMarket || c.forSale || c.isListed) return false;
+
+      return !mine.some((l) => l.capturedId != null && String(l.capturedId) === String(c.id));
+    }
+
+    return !mine.some((l) => l.kind !== 'pokemon' && !l.capturedId && l.refId != null && String(l.refId) === String(c.refId));
+  }
+
   function slRenderOwned() {
     const grid = $('sl-grid');
 
@@ -7112,7 +7501,7 @@
     );
 
     const q = ($('sl-filter').value || '').trim().toLowerCase();
-    let cards = slList().filter((c) => !q || String(c.name).toLowerCase().includes(q));
+    let cards = slList().filter((c) => slNotListed(c) && (!q || String(c.name).toLowerCase().includes(q)));
 
     if (poke) cards = slPokeFilter(cards);
 
