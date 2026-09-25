@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.4.55
+// @version      0.4.57
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -20,7 +20,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.55';
+  const VERSION = '0.4.57';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -682,7 +682,19 @@
 
   let ac = null;
 
-  function beep(force) {
+  const MYTHIC_SOUND = {
+    tones: [
+      [523, 0],
+      [659, 0.1],
+      [784, 0.2],
+      [1047, 0.3],
+      [1319, 0.44],
+      [1568, 0.58],
+      [2093, 0.74]
+    ]
+  };
+
+  function beep(force, special) {
     if (state.muted && !force) return;
 
     try {
@@ -695,6 +707,7 @@
       }
 
       const preset =
+        special ||
         SOUND_PRESETS[state.soundId] ||
         SOUND_PRESETS.chime;
 
@@ -1394,10 +1407,12 @@
       unseen++;
     }
 
-    beep();
+    const mythic = hit.kind === 'pokemon' && /^(m[ií]tic|mythic)/i.test(String(rarityOf(hit) || ''));
+
+    beep(false, mythic ? MYTHIC_SOUND : null);
 
     osNotify(
-      'Poke Idle · ' + a.name,
+      (mythic ? '✨ MÍTICO · ' : 'Poke Idle · ') + a.name,
       text
     );
 
@@ -3203,7 +3218,7 @@
     #mtal-toast-slot .mtal-toast{pointer-events:auto}
     #mtal-badge{background:#12141f;color:#f0d78c;border:1px solid #4a4f66;border-radius:6px;padding:4px 8px;margin-left:4px;font-size:11px;display:inline-flex;align-items:center;justify-content:center;line-height:1}
 
-    #mtal-panel{position:fixed;left:16px;bottom:64px;width:420px;max-height:72vh;overflow:hidden;z-index:2147483646;background:#12141f;color:#e8e3d0;border:1px solid #c9a44a;border-radius:10px;font:12px/1.4 Inter,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.6);display:none;padding:0}
+    #mtal-panel{position:fixed;left:16px;bottom:64px;width:620px;max-height:72vh;overflow:hidden;z-index:2147483646;background:#12141f;color:#e8e3d0;border:1px solid #c9a44a;border-radius:10px;font:12px/1.4 Inter,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.6);display:none;padding:0}
     #mtal-panel[style*="display: block"]{display:flex!important;flex-direction:column}
     #mtal-panel-head{flex:none;position:sticky;top:0;z-index:2;background:#12141f;padding:10px 10px 0 10px;box-shadow:0 6px 10px -6px rgba(0,0,0,.65)}
     #mtal-panel-body{flex:1;min-height:0;overflow-y:auto;padding:0 10px 10px 10px;scrollbar-width:thin}
@@ -3241,11 +3256,18 @@
     #mtal-panel button:hover{border-color:#b5934f}
     #mtal-panel .mtal-h{margin:10px 0 4px;color:#e0b95a;font-weight:bold}
 
+    #mtal-panel .mtal-row.off .mtal-row-body{opacity:.55}
+    #mtal-panel .mtal-dot{display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;vertical-align:1px;background:#7c829c}
+    #mtal-panel .mtal-dot.ok{background:#61f6a4}
+    #mtal-panel .mtal-dot.err{background:#f39a4b}
+    #mtal-panel .mtal-ib{width:28px;height:28px;padding:0;background:transparent;border-color:transparent;color:#9aa0b8;font-size:13px}
+    #mtal-panel .mtal-ib:hover{border-color:#4a4f66;color:#fff}
+    #mtal-panel .mtal-ib.del:hover{color:#ff6b6b}
     #mtal-panel .mtal-row{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid #2c3148;border-radius:8px;margin-bottom:8px}
     #mtal-panel .mtal-row-check{flex:none;width:15px;height:15px}
     #mtal-panel .mtal-row-body{flex:1;min-width:0}
     #mtal-panel .mtal-row-body b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    #mtal-panel .mtal-row-actions{display:flex;align-items:center;gap:10px;flex:none}
+    #mtal-panel .mtal-row-actions{display:flex;align-items:center;gap:2px;flex:none}
     #mtal-panel .mtal-sub{color:#9aa0b8;font-size:11px;margin-top:4px}
     #mtal-panel .mtal-x{cursor:pointer;color:#c0392b;font-size:14px;line-height:1}
     #mtal-panel .mtal-e{cursor:pointer;color:#e0b95a;font-size:14px;line-height:1}
@@ -3397,6 +3419,12 @@
       font-size:11px
     }
 
+    #mtal-panel .mtal-emptycard{display:flex;flex-direction:column;align-items:center;gap:6px;margin:4px 0;padding:28px 20px;text-align:center;background:#171a28;border:1px dashed #2c3148;border-radius:10px}
+    #mtal-panel .mtal-emptycard .ic{display:grid;place-items:center;width:44px;height:44px;margin-bottom:4px;border-radius:50%;background:#1f2436;font-size:20px}
+    #mtal-panel .mtal-emptycard b{font-size:13px;color:#f2ead0}
+    #mtal-panel .mtal-emptycard p{margin:0;max-width:300px;font-size:11.5px;color:#9aa0b8}
+    #mtal-panel .mtal-emptycard small{margin-top:6px;font-size:11px;color:#7c829c}
+    #mtal-panel .mtal-emptycard button{margin-top:8px;height:30px;padding:0 16px}
     #mtal-panel .mtal-empty{
       color:#7c829c;
       padding:4px 2px
@@ -3408,6 +3436,34 @@
       gap:6px;
       flex:none
     }
+
+    #mtal-panel .mtal-hit.lsp{grid-template-columns:52px 120px minmax(0,1fr) 36px;gap:10px;min-height:0;padding:10px 12px}
+    #mtal-panel .lsp-block{justify-self:center;display:flex;align-items:center;gap:14px}
+    #mtal-panel .lsp-block .lsp-grade{width:124px}
+    #mtal-panel .lsp-block .lsp-stats{width:156px}
+    #mtal-panel .lsp-sp{display:flex;flex-direction:column;align-items:center;gap:4px}
+    #mtal-panel .lsp-sp .mtal-hit-thumb{width:52px;height:52px}
+    #mtal-panel .lsp-id{min-width:0}
+    #mtal-panel .lsp-id .mtal-hit-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #mtal-panel .lsp-q{margin-top:4px;font-size:11px;font-weight:600}
+    #mtal-panel .lsp-id .mtal-hit-price{margin-top:4px}
+    #mtal-panel .lsp-grade{display:flex;align-items:center;gap:8px;min-width:0}
+    #mtal-panel .lsp-grade>div:last-child{min-width:0}
+    #mtal-panel .lsp-ring{flex:none;display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:conic-gradient(var(--c) var(--d),#2c3148 0)}
+    #mtal-panel .lsp-ring b{display:grid;place-items:center;width:31px;height:31px;border-radius:50%;background:#1a1e30;font-size:10px;color:var(--c)}
+    #mtal-panel .lsp-cls{font-size:11.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #mtal-panel .lsp-kv{font-size:10px;color:#7c829c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #mtal-panel .lsp-kv b{font-size:11px}
+    #mtal-panel .lsp-ivt{color:#55e6d3}
+    #mtal-panel .lsp-pow{color:#f0c14b}
+    #mtal-panel .lsp-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,auto);grid-auto-flow:column;gap:7px 8px}
+    #mtal-panel .lsp-stats.est{opacity:.55}
+    #mtal-panel .lsp-stat>div{display:flex;align-items:baseline;justify-content:space-between;gap:4px}
+    #mtal-panel .lsp-stat b{font-size:9px;letter-spacing:.04em;color:var(--c)}
+    #mtal-panel .lsp-stat em{font-style:normal;font-size:10.5px;font-weight:700;color:#55e6d3}
+    #mtal-panel .lsp-stat i{display:block;height:3px;margin-top:3px;background:#2c3148;border-radius:2px;overflow:hidden}
+    #mtal-panel .lsp-stat u{display:block;height:100%;background:var(--c);border-radius:2px}
+    #mtal-panel .lsp-acts{flex-direction:column}
 
     #mtal-panel .mtal-hit-actions button{
       font-size:18px;
@@ -3476,47 +3532,30 @@
       color:#e0b95a
     }
 
-    #mtal-form{
-      border:1px dashed #4a4f66;
-      border-radius:10px;
-      padding:14px;
-      margin-top:10px
-    }
-
-    #mtal-form label{
-      display:block;
-      margin:10px 0
-    }
-
-    #mtal-form label:first-of-type{
-      margin-top:0
-    }
-
-    #mtal-form input[type=text],
-    #mtal-form input[type=number],
-    #mtal-form select{
-      background:#0d0f18;
-      color:#e8e3d0;
-      border:1px solid #4a4f66;
-      border-radius:6px;
-      padding:7px 9px;
-      width:160px;
-      margin-top:5px
-    }
-
-    #mtal-form input[type=number]{
-      width:100px
-    }
-
-    #mtal-form .mtal-form-actions{
-      display:flex;
-      gap:8px;
-      margin-top:14px
-    }
-
-    #mtal-form .mtal-form-actions button{
-      padding:8px 14px
-    }
+    #mtal-form{margin:4px 0 10px;padding:12px 14px 14px;background:#171a28;border:1px solid #2c3148;border-radius:10px}
+    #mtal-form [hidden]{display:none!important}
+    #mtal-form .mtal-fhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+    #mtal-form .mtal-fhead b{font-size:13px;color:#f2ead0}
+    #mtal-panel #mtal-form #f-x{width:26px;height:26px;padding:0;background:transparent;border-color:transparent;color:#9aa0b8}
+    #mtal-panel #mtal-form #f-x:hover{border-color:#4a4f66;color:#fff}
+    #mtal-form .mtal-fgrid,#mtal-form .mtal-fsub{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px}
+    #mtal-form .mtal-fsub{grid-column:1/-1}
+    #mtal-form .full{grid-column:1/-1}
+    #mtal-form label{display:flex;flex-direction:column;gap:5px;margin:0}
+    #mtal-form label > span{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#7c829c}
+    #mtal-form input[type=text],#mtal-form input[type=number],#mtal-form select{width:100%;height:32px;box-sizing:border-box;margin:0;padding:0 10px;background:#0d0f18;color:#e8e3d0;border:1px solid #2c3148;border-radius:6px;font-size:12px}
+    #mtal-form input:focus,#mtal-form select:focus{outline:none;border-color:#e8eaf2}
+    #mtal-form .mtal-fhint{margin-top:10px;font-size:10.5px;color:#7c829c}
+    #mtal-form .mtal-form-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+    #mtal-form .mtal-form-actions button{height:32px;padding:0 16px}
+    #mtal-panel .mtal-primary{background:#e8eaf2;border-color:#e8eaf2;color:#12141f;font-weight:700}
+    #mtal-panel .mtal-primary:hover{background:#fff;border-color:#fff}
+    #mtal-panel .mtal-sw{display:flex;flex-direction:row!important;align-items:center;gap:8px;color:#c7cbe0;font-size:12px;cursor:pointer;user-select:none}
+    #mtal-panel .mtal-sw input{position:absolute;opacity:0;width:0;height:0}
+    #mtal-panel .mtal-sw i{position:relative;flex:none;width:30px;height:16px;background:#2c3148;border-radius:999px;transition:background .15s}
+    #mtal-panel .mtal-sw i::after{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;background:#9aa0b8;border-radius:50%;transition:transform .15s,background .15s}
+    #mtal-panel .mtal-sw input:checked + i{background:#e8eaf2}
+    #mtal-panel .mtal-sw input:checked + i::after{transform:translateX(14px);background:#12141f}
 
     #mtal-details{
       position:fixed;
@@ -4136,149 +4175,84 @@
 
         <div id="mtal-list"></div>
 
-        <div
-          id="mtal-form"
-          hidden
-        >
-          <div
-            class="mtal-h"
-            id="f-title"
-            style="margin-top:0"
-          >
-            Novo alerta
+        <div id="mtal-form" hidden>
+          <div class="mtal-fhead">
+            <b id="f-title">Novo alerta</b>
+            <button type="button" id="f-x" title="Fechar">✕</button>
           </div>
 
-          <label>
-            Tipo
-
-            <select id="f-kind">
-              <option value="pokemon">
-                Pokémon
-              </option>
-
-              <option value="items">
-                Item / Stone / Ball / Diamonds
-              </option>
-            </select>
-          </label>
-
-          <div id="f-poke">
-            <label>
-              Espécie
-
-              <input
-                type="text"
-                id="f-species"
-                list="mtal-species"
-                placeholder="qualquer"
-              >
-            </label>
-
-            <datalist id="mtal-species"></datalist>
-
-            <label>
-              IV total mín
-
-              <input
-                type="number"
-                id="f-iv"
-                min="0"
-                max="192"
-                placeholder="sem mínimo"
-              >
-            </label>
-
-            <label>
-              Qualidade mín
-
-              <input
-                type="number"
-                id="f-q"
-                step="0.01"
-                min="0"
-                placeholder="sem mínimo"
-              >
-            </label>
-          </div>
-
-          <div id="f-item" hidden>
-            <label>
-              Categoria
-
-              <select id="f-cat">
-                ${CATEGORIES.map(
-                  (c) =>
-                    `<option value="${esc(c)}">${esc(
-                      catLabel(c)
-                    )}</option>`
-                ).join('')}
+          <div class="mtal-fgrid">
+            <label class="full">
+              <span>Tipo</span>
+              <select id="f-kind">
+                <option value="pokemon">Pokémon</option>
+                <option value="items">Item / Stone / Ball / Diamantes</option>
               </select>
             </label>
 
-            <label>
-              Nome contém
+            <div id="f-poke" class="mtal-fsub">
+              <label class="full">
+                <span>Espécie</span>
+                <input type="text" id="f-species" list="mtal-species" placeholder="Qualquer espécie">
+              </label>
 
-              <input
-                type="text"
-                id="f-text"
-                placeholder="ex.: pheromone"
-              >
+              <datalist id="mtal-species"></datalist>
+
+              <label>
+                <span>IV total mín</span>
+                <input type="number" id="f-iv" min="0" max="192" placeholder="sem mínimo">
+              </label>
+
+              <label>
+                <span>Qualidade mín</span>
+                <input type="number" id="f-q" step="0.01" min="0" placeholder="sem mínimo">
+              </label>
+            </div>
+
+            <div id="f-item" class="mtal-fsub" hidden>
+              <label>
+                <span>Categoria</span>
+                <select id="f-cat">
+                  ${CATEGORIES.map((c) => `<option value="${esc(c)}">${esc(catLabel(c))}</option>`).join('')}
+                </select>
+              </label>
+
+              <label>
+                <span>Nome contém</span>
+                <input type="text" id="f-text" placeholder="ex.: pheromone">
+              </label>
+
+              <label class="mtal-sw full">
+                <input type="checkbox" id="f-npc">
+                <i></i>
+                Só abaixo do preço do NPC
+              </label>
+            </div>
+
+            <label>
+              <span>Preço máximo</span>
+              <input type="number" id="f-price" min="0" placeholder="sem limite">
             </label>
 
             <label>
-              <input
-                type="checkbox"
-                id="f-npc"
-              >
-
-              só abaixo do preço do NPC
+              <span>Moeda</span>
+              <select id="f-cur"></select>
             </label>
+
+            <div id="f-shiny-row" class="full">
+              <label class="mtal-sw">
+                <input type="checkbox" id="f-shiny">
+                <i></i>
+                Só shiny ✨
+              </label>
+            </div>
           </div>
 
-          <label>
-            Preço máx
-
-            <input
-              type="number"
-              id="f-price"
-              min="0"
-              placeholder="sem limite"
-            >
-
-            <select
-              id="f-cur"
-              style="width:90px"
-            ></select>
-          </label>
-
-          <div id="f-shiny-row">
-            <label>
-              <input
-                type="checkbox"
-                id="f-shiny"
-              >
-
-              só shiny
-            </label>
-          </div>
-
-          <div
-            class="mtal-sub"
-            style="margin:0 0 6px"
-          >
-            Vazio = sem limite. Ao definir um preço,
-            escolha a moeda: "qualquer" compara só o
-            número, sem olhar a moeda.
-          </div>
+          <div class="mtal-fhint">Campos vazios = sem limite. Com a moeda "qualquer", o preço compara só o número.</div>
 
           <div class="mtal-form-actions">
-            <button id="f-cancel">
-              Cancelar
-            </button>
-
-            <button id="f-save">
-              Salvar alerta
-            </button>
+            <button type="button" id="f-cancel">Cancelar</button>
+            <button type="button" id="f-save" class="mtal-primary">Salvar alerta</button>
           </div>
         </div>
 
@@ -4645,6 +4619,61 @@
     );
   }
 
+  function lsPokeCard(h, time) {
+    const v = rpInit(h);
+    const R = rpCompute(v);
+    const r = h.raw || {};
+    let types = typesOf(r);
+
+    if (!types.length && v.c) types = [v.c.type1, v.c.type2].filter(Boolean);
+
+    const rar = rarityOf(h);
+    const rc = (rar && RARITY_COLOR[String(rar).toLowerCase()]) || '#e0b95a';
+    const cls = R.cls || [0, '-', '#6b7089', ''];
+    const est = R.est && v.level < 15;
+
+    return `<div class="mtal-hit lsp" data-hid="${h.hid}">
+      <div class="lsp-sp">
+        <div class="mtal-hit-thumb" data-hid="${h.hid}">${hitMiniThumb(h) || thumbHtml(h)}</div>
+        <div class="mtal-hit-date">${time}</div>
+      </div>
+
+      <div class="lsp-id">
+        <div class="mtal-hit-name">${esc(stripLv(h.name))}${h.shiny ? ' ✨' : ''} <span class="mtal-hit-lv">Nv ${esc(v.level)}</span></div>
+        ${types.length ? `<div class="mtal-hit-types">${types.map((t) => rpTypeBadge(t, true)).join('')}</div>` : ''}
+        ${rar ? `<div class="lsp-q" style="color:${rc}">${esc(rar)}${h.quality != null ? ' ×' + Number(h.quality).toFixed(2) : ''}</div>` : ''}
+        <div class="mtal-hit-price">${esc(h.offerOnly ? 'Apenas ofertas' : [currencyIcon(h.currency), fmt(h.price)].filter(Boolean).join(' '))}</div>
+      </div>
+
+      <div class="lsp-block">
+      <div class="lsp-grade">
+        <div class="lsp-ring" style="--c:${cls[2]};--d:${R.pct != null ? Math.min(100, R.pct) * 3.6 : 0}deg"><b>${R.pct != null ? Math.round(R.pct) + '%' : '-'}</b></div>
+        <div>
+          <div class="lsp-cls" style="color:${cls[2]}" title="${esc(cls[1])}">${esc(cls[1])}</div>
+          <div class="lsp-kv">IV <b class="lsp-ivt">${R.ivTotal != null ? esc(R.ivTotal) : '-'}</b>/192</div>
+          <div class="lsp-kv">Poder est. <b class="lsp-pow">${R.power != null ? fmt(Math.round(R.power)) : '-'}</b></div>
+        </div>
+      </div>
+
+      <div class="lsp-stats${est ? ' est' : ''}"${est ? ' title="Estimativa imprecisa (Nv abaixo de 15)"' : ''}>
+        ${['hp', 'def', 'spd', 'atk', 'spa', 'vel'].map((k) => {
+          const iv = R.ivs[k];
+
+          return `<div class="lsp-stat" style="--c:${RP_COLOR[k]}">
+            <div><b>${RP_LABEL[k]}</b><em>${iv == null ? '-' : Number.isInteger(iv) ? iv : iv.toFixed(1)}</em></div>
+            <i><u style="width:${iv == null ? 0 : Math.min(100, (iv / 32) * 100)}%"></u></i>
+          </div>`;
+        }).join('')}
+      </div>
+      </div>
+
+      <div class="mtal-hit-actions lsp-acts">
+        <button type="button" class="mtal-view${h.hid === detailsHid ? ' active' : ''}" data-hid="${h.hid}" title="Detalhes">${EYE_SVG}</button>
+        ${h.buyable ? `<button type="button" class="mtal-buy" data-hid="${h.hid}" title="Comprar">🛒</button>` : ''}
+      </div>
+    </div>`;
+  }
+
   function renderHits() {
     if (!rpCre && hits.some((h) => h.kind === 'pokemon')) {
       rpLoadCreatures().then((ok) => {
@@ -4661,7 +4690,7 @@
       hits.length
         ? hits
             .map(
-              (h) => `
+              (h) => h.kind === 'pokemon' ? lsPokeCard(h, t(h.t)) : `
         <div
           class="mtal-hit"
           data-hid="${h.hid}"
@@ -4728,9 +4757,17 @@
             )
             .join('')
         : `
-          <div class="mtal-empty">
-            Nada ainda. Quando um anúncio novo
-            bater com um alerta, ele aparece aqui.
+          <div class="mtal-emptycard">
+            <div class="ic">🔔</div>
+            <b>Nenhum achado ainda</b>
+            <p>Quando um anúncio novo bater com um dos seus alertas, ele aparece aqui.</p>
+            ${
+              !state.on
+                ? '<small>A LiveSearch está desligada. Ative no topo para voltar a monitorar.</small>'
+                : state.alerts.some((a) => a.enabled)
+                  ? `<small><span class="mtal-dot ok"></span>Monitorando ${state.alerts.filter((a) => a.enabled).length} alerta(s)…</small>`
+                  : '<button type="button" class="mtal-primary" data-empty-new>Criar alerta</button>'
+            }
           </div>
         `;
 
@@ -4849,7 +4886,7 @@
     if (!total) {
       el.innerHTML = `
         <div class="mtal-empty">
-          Nenhum alerta ainda. Crie o primeiro abaixo.
+          Nenhum alerta ainda. Use “＋ Criar alerta”.
         </div>
       `;
 
@@ -4877,18 +4914,14 @@
                     )
                   : 'iniciando…';
 
+          const st = !a.enabled || !state.on ? 'off' : rt.err ? 'err' : 'ok';
+
           return `
-            <div class="mtal-row">
-              <input
-                type="checkbox"
-                class="mtal-row-check"
-                data-t="${a.id}"
-                ${
-                  a.enabled
-                    ? 'checked'
-                    : ''
-                }
-              >
+            <div class="mtal-row${st === 'off' ? ' off' : ''}">
+              <label class="mtal-sw" title="Ativar/pausar este alerta">
+                <input type="checkbox" data-t="${a.id}"${a.enabled ? ' checked' : ''}>
+                <i></i>
+              </label>
 
               <div class="mtal-row-body">
                 <b>
@@ -4896,26 +4929,13 @@
                 </b>
 
                 <div class="mtal-sub">
-                  ${status}
+                  <span class="mtal-dot ${st}"></span>${!state.on && a.enabled ? 'pausado (LiveSearch desligado)' : status}
                 </div>
               </div>
 
               <div class="mtal-row-actions">
-                <span
-                  class="mtal-e"
-                  data-e="${a.id}"
-                  title="Editar"
-                >
-                  ✎
-                </span>
-
-                <span
-                  class="mtal-x"
-                  data-d="${a.id}"
-                  title="Excluir"
-                >
-                  ✕
-                </span>
+                <button type="button" class="mtal-ib" data-e="${a.id}" title="Editar">✎</button>
+                <button type="button" class="mtal-ib del" data-d="${a.id}" title="Excluir">✕</button>
               </div>
             </div>
           `;
@@ -5455,19 +5475,13 @@
       .checked = v;
 
     save();
-
-    if (!v) {
-      panelOpen = false;
-
-      $('mtal-panel')
-        .style.display =
-        'none';
-    }
+    renderList();
+    renderHits();
 
     toast(
       v
-        ? 'LiveSearch: ativado'
-        : 'LiveSearch: desativado',
+        ? 'Alertas ativados'
+        : 'Alertas pausados',
       'onoff'
     );
   }
@@ -5715,6 +5729,8 @@
       }
     );
 
+  $('f-x').addEventListener('click', () => $('f-cancel').click());
+
   $('f-kind')
     .addEventListener(
       'change',
@@ -5740,6 +5756,8 @@
     .addEventListener(
       'click',
       (e) => {
+        if (e.target.closest('[data-empty-new]')) return openForm();
+
         const buyBtn =
           e.target.closest(
             '.mtal-buy'
@@ -5934,9 +5952,8 @@
     .addEventListener(
       'click',
       (e) => {
-        const ds =
-          e.target.dataset ||
-          {};
+        const act = e.target.closest && e.target.closest('[data-e],[data-d]');
+        const ds = (act && act.dataset) || {};
 
         if (ds.e) {
           const target =
