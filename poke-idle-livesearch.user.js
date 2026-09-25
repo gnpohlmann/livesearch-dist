@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.4.42
+// @version      0.4.45
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -20,7 +20,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.42';
+  const VERSION = '0.4.45';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -2227,7 +2227,7 @@
   function renderDetails(h) {
     detailsHid = h.hid;
 
-    const rich = h.kind === 'pokemon' && !h.purchasedAt && hits.includes(h);
+    const rich = h.kind === 'pokemon' && (hits.includes(h) || state.purchased.includes(h));
     const rv = rich ? rpInit(h) : null;
 
     $('mtal-details').classList.toggle('mtal-rich', rich);
@@ -3191,6 +3191,8 @@
     #mtal-panel-body{flex:1;min-height:0;overflow-y:auto;padding:0 10px 10px 10px;scrollbar-width:thin}
     #mtal-panel-body::-webkit-scrollbar{width:3px}
     #mtal-footer{flex:none;text-align:center;padding:6px 10px;font-size:10px;letter-spacing:.03em;color:#9aa0b8;border-top:1px solid #232840;background:#12141f}
+    #mtal-upd{margin-left:6px;padding:1px 7px;border-radius:999px;background:#2c4a2c;border:1px solid #3f6b3f;color:#b6e08a;text-decoration:none;font-weight:700}
+    #mtal-upd:hover{border-color:#b5934f;color:#f0d78c}
 
     #mtal-panel .mtal-head{display:flex;gap:8px;align-items:center;margin-bottom:8px}
     #mtal-panel .mtal-head b{flex:1;min-width:0;color:#e0b95a;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -3338,11 +3340,11 @@
       display:inline-flex;
       align-items:center;
       justify-content:center;
-      height:16px;
+      height:17px;
       padding:0 7px;
       box-sizing:border-box;
       border-radius:999px;
-      font-size:8.5px;
+      font-size:9px;
       font-weight:800;
       line-height:1;
       letter-spacing:.04em;
@@ -3350,11 +3352,13 @@
     }
 
     #mtal-panel .mtal-hit-ivbar{
-      height:4px;
+      max-width:140px;
+      height:var(--mtal-bar,4px);
       margin-top:5px;
       background:#2c3148;
       border-radius:2px;
-      overflow:hidden
+      overflow:hidden;
+      will-change:transform
     }
 
     #mtal-panel .mtal-hit-ivbar i{
@@ -3852,11 +3856,8 @@
     #mtal-details .rp-moves{display:none;flex-direction:column;gap:5px}
     #mtal-details .rp-moves.open{display:flex}
     #mtal-details .rp-move{display:flex;align-items:center;gap:8px;padding:6px 8px;background:#1a1e30;border:1px solid #232840;border-radius:8px}
-    #mtal-details .rp-move .rp-type{height:18px;padding:0 8px;font-size:9px}
-    #mtal-panel .rp-type,#mtal-details .rp-type{padding-top:1px!important}
-    @supports (text-box: trim-both cap alphabetic){
-      #mtal-panel .rp-type,#mtal-details .rp-type{padding-top:0!important;text-box:trim-both cap alphabetic}
-    }
+    #mtal-details .rp-move .rp-type{height:17px;padding:0 8px;font-size:9px}
+    #mtal-panel .rp-type,#mtal-details .rp-type{text-box:trim-both cap alphabetic}
     #mtal-details .rp-move b{font-size:12px;color:#f2ead0}
     #mtal-details .rp-move small{font-size:10.5px;color:#7c829c}
     #mtal-details .rp-move em{margin-left:auto;font-style:normal;font-weight:700;color:#ff9f43}
@@ -4209,7 +4210,8 @@
       </div>
 
       <div id="mtal-footer">
-        LiveSearch v${VERSION}
+        <span id="mtal-ver">Version ${VERSION}</span>
+        <a id="mtal-upd" hidden target="_blank" rel="noopener"></a>
       </div>
     </div>
 
@@ -5277,6 +5279,52 @@
   })();
 
   new ResizeObserver(positionDetails).observe($('mtal-panel'));
+
+  /* ---------- aviso de versão nova ---------- */
+  const UPDATE_URL = 'https://raw.githubusercontent.com/gnpohlmann/livesearch-dist/main/poke-idle-livesearch.user.js';
+
+  const verNewer = (a, b) => {
+    const x = String(a).split('.').map(Number);
+    const y = String(b).split('.').map(Number);
+
+    for (let i = 0; i < Math.max(x.length, y.length); i++) {
+      if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+    }
+
+    return false;
+  };
+
+  function checkUpdate() {
+    if (typeof GM_xmlhttpRequest !== 'function') return;
+
+    GM_xmlhttpRequest({
+      method: 'GET',
+      url: UPDATE_URL + '?t=' + Date.now(),
+      onload: (res) => {
+        const m = /@version\s+([\d.]+)/.exec((res && res.responseText) || '');
+        const a = $('mtal-upd');
+
+        if (!m || !a) return;
+
+        a.hidden = !verNewer(m[1], VERSION);
+        a.href = UPDATE_URL;
+        a.title = 'Clique para instalar a versão ' + m[1];
+        a.textContent = '⬆ ' + m[1] + ' disponível';
+      }
+    });
+  }
+
+  checkUpdate();
+  setInterval(checkUpdate, 30 * 60 * 1000);
+
+  const setBarPx = () => {
+    const dpr = PW.devicePixelRatio || 1;
+
+    document.documentElement.style.setProperty('--mtal-bar', Math.max(1, Math.round(4 * dpr)) / dpr + 'px');
+  };
+
+  setBarPx();
+  window.addEventListener('resize', setBarPx);
   new ResizeObserver(positionDetails).observe($('mtal-mk'));
   window.addEventListener('resize', positionDetails);
 
