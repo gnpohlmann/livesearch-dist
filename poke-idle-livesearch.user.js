@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.4.45
+// @version      0.4.46
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -20,7 +20,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.45';
+  const VERSION = '0.4.46';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -2130,7 +2130,7 @@
         </div>
 
         <div class="rp-sec rp-static">
-          Atributos e IV por stat
+          <span>Atributos e IV por stat</span>
           <span class="rp-dim">(<span data-rp="pct2"></span>${
             rar ? ` · <span style="color:${rc}">${esc(rar)}${h.quality != null ? ' ×' + Number(h.quality).toFixed(2) : ''}</span>` : ''
           })</span>
@@ -2148,7 +2148,7 @@
         <div class="rp-warn" data-rp="warn"></div>
 
         <div class="rp-sec${store.get('rpMovesOpen', false) ? ' open' : ''}" data-rp-toggle="moves">
-          ⚔ Golpes <span class="rp-dim">(${moves.filter((m) => !(m.lvl != null && Number.isFinite(v.level) && +m.lvl > v.level)).length}/${moves.length} liberados)</span>
+          <span>⚔ Golpes</span> <span class="rp-dim">(${moves.filter((m) => !(m.lvl != null && Number.isFinite(v.level) && +m.lvl > v.level)).length}/${moves.length} liberados)</span>
           <i>▾</i>
         </div>
 
@@ -2227,7 +2227,7 @@
   function renderDetails(h) {
     detailsHid = h.hid;
 
-    const rich = h.kind === 'pokemon' && (hits.includes(h) || state.purchased.includes(h));
+    const rich = h.kind === 'pokemon' && (hits.includes(h) || state.purchased.includes(h) || mk.rows.includes(h));
     const rv = rich ? rpInit(h) : null;
 
     $('mtal-details').classList.toggle('mtal-rich', rich);
@@ -3770,6 +3770,41 @@
     #mtal-mk .mk-acts{text-align:right;width:1%}
     #mtal-mk .mk-acts button{width:30px;height:30px;padding:0;margin-left:4px;display:inline-flex;align-items:center;justify-content:center;font-size:14px;vertical-align:middle}
     #mtal-mk .mk-acts svg{display:block}
+    #mtal-mk .mkc-bar{padding:8px 10px;text-transform:none;letter-spacing:0;font-size:11px;font-weight:600}
+    #mtal-mk .mkc-sort{margin-left:6px;padding:3px 10px;font-size:11px}
+    #mtal-mk .mkc-sort.on{background:#3d3420;border-color:#c9a44a;color:#f0d78c}
+    #mtal-mk .mkc-row td{padding:4px 10px;border-bottom:none;background:transparent!important}
+    #mtal-mk table.mkc-table{table-layout:fixed}
+    #mtal-mk .mkc{display:grid;grid-template-columns:64px minmax(0,1fr) 150px 150px;grid-template-areas:"sp id grade side" "sp stats stats stats";align-items:center;gap:8px 16px;padding:10px 12px;background:#1a1e30;border:1px solid #232840;border-radius:10px;white-space:normal;cursor:pointer}
+    #mtal-mk .mkc-row:hover .mkc{border-color:#4a4f66}
+    #mtal-mk .mkc-row.on .mkc{border-color:#c9a44a;background:#211f1a}
+    #mtal-mk .mkc-sp{grid-area:sp;align-self:center;width:64px;height:64px;display:flex;align-items:center;justify-content:center;font-size:20px}
+    #mtal-mk .mkc-sp img{max-width:100%;max-height:100%;image-rendering:pixelated}
+    #mtal-mk .mkc-id{grid-area:id;min-width:0}
+    #mtal-mk .mkc-name{font-size:14px;font-weight:700;color:#f2ead0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #mtal-mk .mkc-name small{font-size:11px;font-weight:600;color:#7c829c}
+    #mtal-mk .mkc-types{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
+    #mtal-mk .mkc-q{margin-top:5px;font-size:11.5px;font-weight:600}
+    #mtal-mk .rp-type{display:inline-flex;align-items:center;justify-content:center;height:17px;padding:0 7px;box-sizing:border-box;border-radius:999px;font-size:9px;font-weight:800;line-height:1;letter-spacing:.04em;text-transform:uppercase;text-box:trim-both cap alphabetic}
+    #mtal-mk .mkc-grade{grid-area:grade;display:flex;align-items:center;gap:10px}
+    #mtal-mk .rp-ring{flex:none;display:grid;place-items:center;width:46px;height:46px;border-radius:50%;background:conic-gradient(var(--c) var(--d),#2c3148 0)}
+    #mtal-mk .rp-ring b{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:#1a1e30;font-size:11px;color:var(--c)}
+    #mtal-mk .mkc-cls{font-size:12px;font-weight:700}
+    #mtal-mk .mkc-kv{font-size:10.5px;color:#7c829c;white-space:nowrap}
+    #mtal-mk .mkc-kv b{font-size:11.5px}
+    #mtal-mk .rp-ivt{color:#55e6d3}
+    #mtal-mk .rp-pow{color:#f0c14b}
+    #mtal-mk .mkc-stats{grid-area:stats;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;padding-top:8px;border-top:1px solid #232840}
+    #mtal-mk .mkc-stats.est{opacity:.55}
+    #mtal-mk .mkc-stat>div{display:flex;align-items:baseline;justify-content:space-between;font-size:10px;color:#7c829c}
+    #mtal-mk .mkc-stat b{font-size:10px;letter-spacing:.04em;color:var(--c)}
+    #mtal-mk .mkc-stat em{font-style:normal;font-size:11.5px;font-weight:700;color:#55e6d3}
+    #mtal-mk .mkc-stat i{display:block;height:4px;margin-top:3px;background:#2c3148;border-radius:2px;overflow:hidden}
+    #mtal-mk .mkc-stat u{display:block;height:100%;background:var(--c);border-radius:2px}
+    #mtal-mk .mkc-side{grid-area:side;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+    #mtal-mk .mkc-side .mk-acts{display:flex;gap:4px;width:auto}
+    #mtal-mk .mkc-side .mk-acts button{margin-left:0}
+    #mtal-mk .mkc-side .mk-price{font-size:13px;text-align:right;white-space:nowrap}
     #mtal-mk .mk-empty{text-align:center;color:#7c829c;padding:30px}
     #mtal-mk .mk-foot{display:flex;align-items:center;gap:10px;padding:8px 12px;border-top:1px solid #232840;color:#9aa0b8}
     #mtal-mk:not([data-mode="buy"]) .mk-buyv,#mtal-mk:not([data-mode="sell"]) .mk-sellv,#mtal-mk:not([data-mode="hist"]) .mk-histv{display:none!important}
@@ -3834,7 +3869,8 @@
     #mtal-details .rp-ring b{display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:#1a1e30;font-size:12px;color:var(--c)}
     #mtal-details .rp-grade strong{font-size:14px}
     #mtal-details .rp-grade p{margin:2px 0 0;font-size:11px;color:#9aa0b8}
-    #mtal-details .rp-sec{display:flex;align-items:center;gap:6px;margin:12px 0 6px;padding:8px 10px;background:#171a28;border:1px solid #2c3148;border-radius:8px;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#c7cbe0;cursor:pointer;user-select:none}
+    #mtal-details .rp-sec>span{display:block;line-height:1;text-box:trim-both cap alphabetic}
+    #mtal-details .rp-sec{display:flex;align-items:center;gap:6px;margin:12px 0 6px;padding:11px 10px;background:#171a28;border:1px solid #2c3148;border-radius:8px;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#c7cbe0;cursor:pointer;user-select:none}
     #mtal-details .rp-sec:hover{color:#f0d78c;border-color:#b5934f}
     #mtal-details .rp-sec i{margin-left:auto;font-style:normal;transition:transform .15s}
     #mtal-details .rp-sec.open i{transform:rotate(180deg)}
@@ -6270,6 +6306,63 @@
     return out;
   }
 
+  function mkPokeCard(h) {
+    const v = rpInit(h);
+    const R = rpCompute(v);
+    const r = h.raw || {};
+    let types = typesOf(r);
+
+    if (!types.length && v.c) types = [v.c.type1, v.c.type2].filter(Boolean);
+
+    const sp = rpSprite(h, v.c);
+    const rar = rarityOf(h);
+    const rc = (rar && RARITY_COLOR[String(rar).toLowerCase()]) || '#e0b95a';
+    const cls = R.cls || [0, '-', '#6b7089', ''];
+    const est = R.est && v.level < 15;
+
+    return `<div class="mkc">
+      <div class="mkc-sp mtal-hit-thumb" data-hid="${h.hid}">${
+        sp
+          ? `<img src="${esc(sp.anim)}" data-fb="${esc(sp.still)}" onerror="if(this.dataset.fb){this.src=this.dataset.fb;this.dataset.fb=''}else{this.parentElement.textContent='❔'}">`
+          : thumbHtml(h)
+      }</div>
+
+      <div class="mkc-id">
+        <div class="mkc-name">${esc(stripLv(h.name))}${h.shiny ? ' ✨' : ''} <small>Nv ${esc(v.level)}</small></div>
+        <div class="mkc-types">${types.map((t) => rpTypeBadge(t, true)).join('')}</div>
+        ${rar ? `<div class="mkc-q" style="color:${rc}">${esc(rar)}${h.quality != null ? ' ×' + Number(h.quality).toFixed(2) : ''}</div>` : ''}
+      </div>
+
+      <div class="mkc-grade">
+        <div class="rp-ring" style="--c:${cls[2]};--d:${R.pct != null ? Math.min(100, R.pct) * 3.6 : 0}deg"><b>${R.pct != null ? Math.round(R.pct) + '%' : '-'}</b></div>
+        <div>
+          <div class="mkc-cls" style="color:${cls[2]}">${esc(cls[1])}</div>
+          <div class="mkc-kv">IV <b class="rp-ivt">${R.ivTotal != null ? esc(R.ivTotal) : '-'}</b>/192</div>
+          <div class="mkc-kv">Poder est. <b class="rp-pow">${R.power != null ? fmt(Math.round(R.power)) : '-'}</b></div>
+        </div>
+      </div>
+
+      <div class="mkc-stats${est ? ' est' : ''}"${est ? ' title="Estimativa imprecisa (Nv abaixo de 15)"' : ''}>
+        ${RP_KEYS.map((k) => {
+          const iv = R.ivs[k];
+
+          return `<div class="mkc-stat" style="--c:${RP_COLOR[k]}">
+            <div><b>${RP_LABEL[k]}</b><span><em>${iv == null ? '-' : Number.isInteger(iv) ? iv : iv.toFixed(1)}</em>/32</span></div>
+            <i><u style="width:${iv == null ? 0 : Math.min(100, (iv / 32) * 100)}%"></u></i>
+          </div>`;
+        }).join('')}
+      </div>
+
+      <div class="mkc-side">
+        <div class="mk-price">${esc(hitPrice(h))}</div>
+        <div class="mk-acts">
+          <button type="button" class="mk-mkt" data-hid="${h.hid}" title="Abrir no Market">⚖️</button>
+          ${h.buyable ? `<button type="button" class="mk-buy" data-hid="${h.hid}" title="Comprar">${h.currency === 'DIAMONDS' ? '💎' : '$'}</button>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }
+
   function mkRender() {
     const poke = mk.cat === 'pokemon';
 
@@ -6297,16 +6390,29 @@
         k && mk.sort.k === k ? (mk.sort.dir > 0 ? ' ▲' : ' ▼') : ''
       }</th>`;
 
+    const sb = (label, k) =>
+      `<button type="button" class="mkc-sort${mk.sort.k === k ? ' on' : ''}" data-sort="${k}">${label}${
+        mk.sort.k === k ? (mk.sort.dir > 0 ? ' ▲' : ' ▼') : ''
+      }</button>`;
+
+    if (poke && !rpCre) {
+      rpLoadCreatures().then((ok) => {
+        if (ok && mk.cat === 'pokemon') mkRender();
+      });
+    }
+
     $('mk-thead').innerHTML =
       '<tr>' +
       (poke
-        ? th('') + th('Pokémon') + th('Nv', 'lvl') + th('IV', 'iv') + th('Raridade', 'q') + th('Tipos') + th('Preço', 'price', 'r') + th('')
+        ? `<th colspan="8" class="mkc-bar">Ordenar: ${sb('Nível', 'lvl')}${sb('IV', 'iv')}${sb('Raridade', 'q')}${sb('Preço', 'price')}</th>`
         : mk.cat === 'all'
           ? th('') + th('Anúncio') + th('Categoria') + th('Qtd', 'qty') + th('Preço', 'price', 'r') + th('')
           : th('') + th('Item') + th('Qtd', 'qty') + th('Preço/un', 'price', 'r') + th('')) +
       '</tr>';
 
     const rows = mkVisible();
+
+    $('mk-tbody').parentElement.classList.toggle('mkc-table', poke);
 
     $('mk-tbody').innerHTML =
       rows
@@ -6339,6 +6445,10 @@
           }
 
           if (h.kind === 'pokemon') {
+            return `<tr class="mtal-mkrow mkc-row" data-hid="${h.hid}"><td colspan="8">${mkPokeCard(h)}</td></tr>`;
+          }
+
+          if (h.kind === 'pokemon') {
             const rar = rarityOf(h);
             const rc = (rar && RARITY_COLOR[String(rar).toLowerCase()]) || '#e0b95a';
             const iv = Number(h.ivTotal) || 0;
@@ -6365,7 +6475,7 @@
         mk.loading ? 'Carregando…' : mk.err ? '⚠ ' + esc(mk.err) : 'Nenhum anúncio com esses filtros.'
       }</td></tr>`;
 
-    rows.forEach(ensureSprite);
+    rows.filter((h) => !(h.kind === 'pokemon' && mk.cat !== 'all' && rpSprite(h, rpCreature(h)))).forEach(ensureSprite);
 
     $('mk-count').textContent =
       rows.length + ' de ' + mk.rows.length + ' carregados' + (mk.loading && mk.rows.length ? ' · carregando…' : '');
