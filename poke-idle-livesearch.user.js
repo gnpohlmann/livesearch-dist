@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.4.50
+// @version      0.4.51
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -20,7 +20,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.50';
+  const VERSION = '0.4.51';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -3772,6 +3772,24 @@
     #mtal-mk .mk-acts svg{display:block}
     #mtal-mk .mkc-bar{padding:8px 10px;text-transform:none;letter-spacing:0;font-size:11px;font-weight:600}
     #mtal-mk .mkc-sort{margin-left:6px;padding:3px 10px;font-size:11px}
+    #mtal-mk .mkc-barin{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    #mtal-mk .mkc-views{display:flex}
+    #mtal-mk .mkc-views button{width:30px;height:26px;padding:0;font-size:13px;border-radius:0}
+    #mtal-mk .mkc-views button:first-child{border-radius:6px 0 0 6px}
+    #mtal-mk .mkc-views button:last-child{border-radius:0 6px 6px 0;border-left:none}
+    #mtal-mk .mkc-views button.on{background:#3d3420;border-color:#c9a44a;color:#f0d78c}
+    #mtal-mk .mkc-gridrow td{padding:4px 10px;border-bottom:none;background:transparent!important}
+    #mtal-mk .mkc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
+    #mtal-mk .mkc-grid .mkc{height:100%;box-sizing:border-box;grid-template-columns:minmax(0,1fr);grid-template-areas:"sp" "id" "grade" "stats" "side";justify-items:center;align-content:start;gap:10px;text-align:center}
+    #mtal-mk .mkc-grid .mkc-sp{width:80px;height:80px}
+    #mtal-mk .mkc-grid .mkc-id{width:100%}
+    #mtal-mk .mkc-grid .mkc-name{white-space:normal}
+    #mtal-mk .mkc-grid .mkc-types{justify-content:center}
+    #mtal-mk .mkc-grid .mkc-grade{text-align:left}
+    #mtal-mk .mkc-grid .mkc-stats{width:100%;text-align:left;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:none;grid-auto-flow:row;gap:8px 14px;padding-top:10px;border-top:1px solid #232840}
+    #mtal-mk .mkc-grid .mkc-side{width:100%;flex-direction:row;align-items:center;justify-content:space-between;padding-top:10px;border-top:1px solid #232840}
+    #mtal-mk .mkc-cell:hover .mkc{border-color:#4a4f66}
+    #mtal-mk .mkc-cell.on .mkc{border-color:#c9a44a;background:#211f1a}
     #mtal-mk .mkc-sort.on{background:#3d3420;border-color:#c9a44a;color:#f0d78c}
     #mtal-mk .mkc-row td{padding:4px 10px;border-bottom:none;background:transparent!important}
     #mtal-mk table.mkc-table{table-layout:fixed}
@@ -6059,7 +6077,8 @@
     err: '',
     sort: { k: null, dir: -1 },
     rar: new Set(),
-    mode: 'buy'
+    mode: 'buy',
+    view: store.get('mkView', 'list')
   };
 
   const mkNum = (id, int) => {
@@ -6408,7 +6427,7 @@
     $('mk-thead').innerHTML =
       '<tr>' +
       (poke
-        ? `<th colspan="8" class="mkc-bar">Ordenar: ${sb('Nível', 'lvl')}${sb('IV', 'iv')}${sb('Raridade', 'q')}${sb('Preço', 'price')}</th>`
+        ? `<th colspan="8" class="mkc-bar"><div class="mkc-barin"><span>Ordenar: ${sb('Nível', 'lvl')}${sb('IV', 'iv')}${sb('Raridade', 'q')}${sb('Preço', 'price')}</span><span class="mkc-views"><button type="button" data-view="list" class="${mk.view === 'list' ? 'on' : ''}" title="Lista">☰</button><button type="button" data-view="grid" class="${mk.view === 'grid' ? 'on' : ''}" title="Grade">▦</button></span></div></th>`
         : mk.cat === 'all'
           ? th('') + th('Anúncio') + th('Categoria') + th('Qtd', 'qty') + th('Preço', 'price', 'r') + th('')
           : th('') + th('Item') + th('Qtd', 'qty') + th('Preço/un', 'price', 'r') + th('')) +
@@ -6478,6 +6497,12 @@
       `<tr><td colspan="8" class="mk-empty">${
         mk.loading ? 'Carregando…' : mk.err ? '⚠ ' + esc(mk.err) : 'Nenhum anúncio com esses filtros.'
       }</td></tr>`;
+
+    if (poke && mk.view === 'grid' && rows.length) {
+      $('mk-tbody').innerHTML = `<tr class="mkc-gridrow"><td colspan="8"><div class="mkc-grid">${rows
+        .map((h) => `<div class="mtal-mkrow mkc-cell" data-hid="${h.hid}">${mkPokeCard(h)}</div>`)
+        .join('')}</div></td></tr>`;
+    }
 
     rows.filter((h) => !(h.kind === 'pokemon' && mk.cat !== 'all' && rpSprite(h, rpCreature(h)))).forEach(ensureSprite);
 
@@ -6579,6 +6604,16 @@
   });
 
   $('mk-thead').addEventListener('click', (e) => {
+    const vb = e.target.closest('[data-view]');
+
+    if (vb) {
+      mk.view = vb.dataset.view;
+      store.set('mkView', mk.view);
+      mkRender();
+
+      return;
+    }
+
     const t = e.target.closest('[data-sort]');
 
     if (!t) return;
@@ -6595,7 +6630,7 @@
 
   $('mk-tbody').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-hid]');
-    const tr = e.target.closest('tr[data-hid]');
+    const tr = e.target.closest('.mtal-mkrow[data-hid]');
 
     if (!b && !tr) return;
 
@@ -6603,7 +6638,7 @@
 
     if (!h) return;
 
-    document.querySelectorAll('#mk-tbody tr[data-hid]').forEach((r) => r.classList.toggle('on', r === tr));
+    document.querySelectorAll('#mk-tbody .mtal-mkrow[data-hid]').forEach((r) => r.classList.toggle('on', r === tr));
 
     if (!b) {
       showDetails(h, 'mtal-mk');
