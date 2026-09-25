@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.4.35
+// @version      0.4.40
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -20,7 +20,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.35';
+  const VERSION = '0.4.40';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -1879,8 +1879,358 @@
       <b>${esc(val)}</b>
     </div>`;
 
+  /* ---------- card rico do Pokémon (Achados) ---------- */
+  const RP_KEYS = ['hp', 'atk', 'def', 'spa', 'spd', 'vel'];
+  const RP_EXP = { hp: 0.95, atk: 0.8, def: 0.8, spa: 0.8, spd: 0.8, vel: 0.95 };
+  const RP_LABEL = { hp: 'HP', atk: 'ATK', def: 'DEF', spa: 'SPA', spd: 'SPD', vel: 'VEL' };
+  const RP_COLOR = { hp: '#4caf50', atk: '#ff9800', def: '#ffd54a', spa: '#2196f3', spd: '#26c6da', vel: '#ec5f9a' };
+  const RP_STAT_KEYS = {
+    hp: ['hp'],
+    atk: ['atk', 'attack'],
+    def: ['def', 'defense'],
+    spa: ['spAtk', 'specialAttack', 'sp_atk'],
+    spd: ['spDef', 'specialDefense', 'sp_def'],
+    vel: ['speed', 'vel', 'spe']
+  };
+  const RP_BASE_KEYS = { hp: 'baseHp', atk: 'baseAtk', def: 'baseDef', spa: 'baseSpAtk', spd: 'baseSpDef', vel: 'baseSpeed' };
+  const RP_TYPE_PT = {
+    normal: 'Normal', fire: 'Fogo', water: 'Água', electric: 'Elétrico', grass: 'Planta', ice: 'Gelo',
+    fighting: 'Lutador', poison: 'Veneno', ground: 'Terra', flying: 'Voador', psychic: 'Psíquico', bug: 'Inseto',
+    rock: 'Pedra', ghost: 'Fantasma', dragon: 'Dragão', dark: 'Sombrio', steel: 'Aço', fairy: 'Fada'
+  };
+  const RP_CLASS = [
+    [95, 'Excepcional', '#61f6a4', 'Um exemplar extremamente próximo do potencial máximo.'],
+    [85, 'Excelente', '#54e7d2', 'Ótimos atributos e excelente eficiência geral.'],
+    [72, 'Muito bom', '#5ed7b9', 'Um Pokémon forte e acima da média.'],
+    [58, 'Bom', '#69b7ff', 'Bom equilíbrio de atributos para uso geral.'],
+    [42, 'Mediano', '#f1c644', 'Possui atributos equilibrados, mas pode melhorar.'],
+    [25, 'Abaixo da média', '#f39a4b', 'Alguns atributos importantes estão abaixo do ideal.'],
+    [0, 'Fraco', '#f05a62', 'Baixo potencial geral em comparação ao máximo possível.']
+  ];
+
+  let rpCre = null;
+  let rpCreP = null;
+
+  function rpLoadCreatures() {
+    if (rpCre) return Promise.resolve(rpCre);
+
+    if (!rpCreP) {
+      rpCreP = PW.fetch('/game/creatures.json')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          const arr = (d && (d.creatures || (Array.isArray(d) ? d : null))) || [];
+          const byId = new Map();
+          const byName = new Map();
+
+          arr.forEach((c) => {
+            if (!c) return;
+            if (c.pokeId != null) byId.set(+c.pokeId, c);
+            if (c.name) byName.set(String(c.name).toLowerCase().trim(), c);
+          });
+
+          rpCre = { byId, byName };
+
+          return rpCre;
+        })
+        .catch(() => {
+          rpCreP = null;
+
+          return null;
+        });
+    }
+
+    return rpCreP;
+  }
+
+  function rpCreature(h) {
+    const r = h.raw || {};
+    const sid = +r.speciesId;
+    let c = rpCre ? (sid && rpCre.byId.get(sid)) || rpCre.byName.get(stripLv(h.name).toLowerCase()) : null;
+
+    if (!c && sid) {
+      try {
+        c = slDexMap().get(sid) || null;
+      } catch (e) {
+        c = null;
+      }
+    }
+
+    return c || null;
+  }
+
+  function rpMoves(c) {
+    if (!c) return [];
+
+    const arr = [c.moves, c.attacks, c.skills, c.spells].find((a) => Array.isArray(a) && a.length) || [];
+
+    return arr
+      .map((s) => {
+        if (typeof s === 'string') return { name: s };
+        if (!s || typeof s !== 'object') return null;
+
+        const name = s.name || s.moveName || s.move || s.id;
+
+        return name
+          ? {
+              name: String(name),
+              power: pick(s, ['power', 'basePower', 'damage', 'dmg']),
+              type: pick(s, ['type', 'element']),
+              lvl: pick(s, ['learnLevel', 'level', 'lvl'])
+            }
+          : null;
+      })
+      .filter(Boolean);
+  }
+
+  function rpSprite(h, c) {
+    const r = h.raw || {};
+    let id = +(c && c.captureBase) || +r.speciesId || +(c && c.pokeId) || 0;
+
+    if (id >= 13000 && id < 14000) id -= 13000;
+    if (!id || id > 1025) return null;
+
+    const base = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon';
+    const sh = h.shiny ? 'shiny/' : '';
+
+    return {
+      anim: base + '/versions/generation-v/black-white/animated/' + sh + id + '.gif',
+      still: base + '/' + sh + id + '.png'
+    };
+  }
+
+  const rpTextOn = (hex) => {
+    const n = parseInt(String(hex).slice(1), 16);
+    const l = 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255);
+
+    return l > 140 ? '#15171f' : '#fff';
+  };
+
+  const rpTypeBadge = (t, pt) => {
+    const k = String(t).toLowerCase();
+    const bg = TYPE_COLOR[k] || '#6b7089';
+
+    return `<span class="rp-type" style="background:${bg};color:${rpTextOn(bg)}">${esc(pt ? RP_TYPE_PT[k] || cap(k) : k)}</span>`;
+  };
+
+  function rpInit(h) {
+    const r = h.raw || {};
+    const stats = r.stats || r;
+    const growth = r.growth || r.ivs || null;
+    const c = rpCreature(h);
+    const cur = {};
+    const base = {};
+    const g = {};
+
+    RP_KEYS.forEach((k) => {
+      const cv = pick(stats, RP_STAT_KEYS[k]);
+      const bv = c ? c[RP_BASE_KEYS[k]] : null;
+      const gv = growth && typeof growth === 'object' ? pick(growth, RP_STAT_KEYS[k]) : null;
+
+      cur[k] = cv != null ? Number(cv) : null;
+      base[k] = bv != null ? Number(bv) : null;
+      g[k] = gv != null ? Number(gv) : null;
+    });
+
+    const lvl = Number(levelOf({ ...r, name: h.name })) || 1;
+
+    return {
+      c,
+      cur,
+      base,
+      growth: RP_KEYS.every((k) => Number.isFinite(g[k])) ? g : null,
+      edited: false,
+      level: lvl,
+      lvl0: lvl,
+      q: Number(h.quality) || 1,
+      ivObs: h.ivTotal != null ? Number(h.ivTotal) : null
+    };
+  }
+
+  function rpCompute(v) {
+    const est = !(v.growth && !v.edited);
+    const ivs = {};
+    let sum = 0;
+    let ok = true;
+
+    RP_KEYS.forEach((k) => {
+      let iv = null;
+
+      if (!est) {
+        iv = v.growth[k];
+      } else if ([v.cur[k], v.base[k], v.level, v.q].every(Number.isFinite) && v.level > 0 && v.q > 0) {
+        const f = (v.level / 100) * Math.pow(v.q, RP_EXP[k]);
+
+        iv = Math.min(32, Math.max(0, (v.cur[k] / f - v.base[k]) / 2));
+      } else {
+        ok = false;
+      }
+
+      ivs[k] = iv;
+      sum += iv || 0;
+    });
+
+    const useObs = Number.isFinite(v.ivObs) && v.ivObs > 0 && v.level === v.lvl0;
+    const ivTotal = useObs ? v.ivObs : ok ? Math.ceil(sum) : null;
+    const pct = useObs ? (v.ivObs / 192) * 100 : ok ? (sum / 192) * 100 : null;
+    let power = null;
+
+    if (ok && Number.isFinite(v.level) && Number.isFinite(v.q) && RP_KEYS.every((k) => Number.isFinite(v.base[k]))) {
+      power =
+        RP_KEYS.reduce(
+          (t, k) =>
+            t + Math.round((v.base[k] + 2 * (Math.round(ivs[k] * 10) / 10)) * (v.level / 100) * Math.pow(v.q, RP_EXP[k])),
+          0
+        ) * v.q;
+    }
+
+    return { ivs, ivTotal, pct, power, est, ok, cls: pct != null ? RP_CLASS.find((x) => pct >= x[0]) : null };
+  }
+
+  function rpHtml(h, v) {
+    const r = h.raw || {};
+    const c = v.c;
+    let types = typesOf(r);
+
+    if (!types.length && c) types = [c.type1, c.type2].filter(Boolean);
+
+    const sp = rpSprite(h, c);
+    const who = pick(r, ['sellerName', 'ownerName', 'seller', 'owner', 'familyName']);
+    const rar = rarityOf(h);
+    const rc = (rar && RARITY_COLOR[String(rar).toLowerCase()]) || '#e0b95a';
+    const moves = rpMoves(c);
+    const num = (x) => (x == null || !Number.isFinite(x) ? '' : String(x));
+
+    return `
+      <div class="rp" data-rp-root>
+        <div class="rp-top">
+          <div class="rp-sprite mtal-hit-thumb" data-hid="${h.hid}">${
+            sp
+              ? `<img src="${esc(sp.anim)}" data-fb="${esc(sp.still)}" onerror="if(this.dataset.fb){this.src=this.dataset.fb;this.dataset.fb=''}else{this.parentElement.textContent='❔'}">`
+              : thumbHtml(h)
+          }</div>
+
+          <div class="rp-id">
+            <div class="rp-name">${esc(stripLv(h.name))}${h.shiny ? ' ✨' : ''}${
+              typeof who === 'string' ? `<small>${esc(who)}</small>` : ''
+            }</div>
+            <div class="rp-types">${types.map((t) => rpTypeBadge(t, true)).join('')}</div>
+          </div>
+        </div>
+
+        <div class="rp-boxes">
+          <div class="rp-box"><span>Nível</span><b>${esc(num(v.level) || '-')}</b></div>
+          <div class="rp-box"><span>Qualidade</span><b style="color:${rc}">${esc(Number.isFinite(v.q) ? v.q.toFixed(2) : '-')}</b></div>
+          <div class="rp-box"><span>IV total</span><b class="rp-ivt" data-rp="ivt"></b></div>
+          <div class="rp-box"><span>Poder est.</span><b class="rp-pow" data-rp="pow"></b></div>
+        </div>
+
+        <div class="rp-grade">
+          <div class="rp-ring" data-rp="ring"><b data-rp="pct"></b></div>
+          <div><strong data-rp="cls"></strong><p data-rp="desc"></p></div>
+        </div>
+
+        <div class="rp-sec rp-static">
+          Atributos e IV por stat
+          <span class="rp-dim">(<span data-rp="pct2"></span>${
+            rar ? ` · <span style="color:${rc}">${esc(rar)}${h.quality != null ? ' ×' + Number(h.quality).toFixed(2) : ''}</span>` : ''
+          })</span>
+        </div>
+
+        <div class="rp-stats">
+          ${RP_KEYS.map(
+            (k) => `<div class="rp-stat" style="--c:${RP_COLOR[k]}">
+            <div class="rp-stat-h"><b>${RP_LABEL[k]}</b><span><em data-rp="iv-${k}"></em>/32</span></div>
+            <div class="rp-bar"><i data-rp="bar-${k}"></i></div>
+          </div>`
+          ).join('')}
+        </div>
+
+        <div class="rp-warn" data-rp="warn"></div>
+
+        <div class="rp-sec${store.get('rpMovesOpen', false) ? ' open' : ''}" data-rp-toggle="moves">
+          ⚔ Golpes <span class="rp-dim">(${moves.filter((m) => !(m.lvl != null && Number.isFinite(v.level) && +m.lvl > v.level)).length}/${moves.length} liberados)</span>
+          <i>▾</i>
+        </div>
+
+        <div class="rp-moves${store.get('rpMovesOpen', false) ? ' open' : ''}">
+          ${
+            moves
+              .map(
+                (m) => `<div class="rp-move${m.lvl != null && Number.isFinite(v.level) && +m.lvl > v.level ? ' locked' : ''}"${
+                  m.lvl != null && Number.isFinite(v.level) && +m.lvl > v.level ? ` title="Libera no Nv ${esc(m.lvl)}"` : ''
+                }>
+            ${m.type ? rpTypeBadge(m.type, false) : ''}
+            <b>${esc(m.name)}</b>
+            ${m.lvl != null ? `<small>${Number.isFinite(v.level) && +m.lvl > v.level ? '🔒 ' : ''}Nv ${esc(m.lvl)}</small>` : ''}
+            ${m.power != null ? `<em>${esc(m.power)}</em>` : ''}
+          </div>`
+              )
+              .join('') || `<div class="rp-dim">${rpCre ? 'Sem golpes cadastrados.' : 'Carregando…'}</div>`
+          }
+        </div>
+      </div>
+    `;
+  }
+
+  function rpApply(root, v) {
+    const R = rpCompute(v);
+    const q = (k) => root.querySelector('[data-rp="' + k + '"]');
+    const cls = R.cls || [0, '-', '#6b7089', ''];
+
+    q('ivt').innerHTML = R.ivTotal != null ? esc(R.ivTotal) + '<small>/192</small>' : '-';
+    q('pow').textContent = R.power != null ? fmt(Math.round(R.power)) : '-';
+
+    const ring = q('ring');
+
+    ring.style.setProperty('--c', cls[2]);
+    ring.style.setProperty('--d', (R.pct != null ? Math.min(100, R.pct) * 3.6 : 0) + 'deg');
+
+    q('pct').textContent = R.pct != null ? Math.round(R.pct) + '%' : '-';
+    q('cls').textContent = cls[1];
+    q('cls').style.color = cls[2];
+    q('desc').textContent = cls[3];
+    q('pct2').textContent = R.pct != null ? R.pct.toFixed(1) + '%' : '-';
+
+    RP_KEYS.forEach((k) => {
+      const iv = R.ivs[k];
+
+      q('iv-' + k).textContent = iv == null ? '-' : Number.isInteger(iv) ? String(iv) : iv.toFixed(1);
+      q('bar-' + k).style.width = (iv == null ? 0 : Math.min(100, (iv / 32) * 100)) + '%';
+    });
+
+    q('warn').textContent = !R.est
+      ? ''
+      : !R.ok
+        ? 'Faltam valores base/atuais para estimar os IVs por stat.'
+        : v.level < 15
+          ? 'Nv abaixo de 15: os IVs por stat são estimativas imprecisas.'
+          : '';
+  }
+
+  function rpBind(root, v) {
+    root.addEventListener('click', (e) => {
+      const t = e.target.closest('[data-rp-toggle]');
+
+      if (!t) return;
+
+      const key = t.dataset.rpToggle;
+      const box = root.querySelector('.rp-moves');
+      const open = !box.classList.contains('open');
+
+      box.classList.toggle('open', open);
+      root.querySelectorAll('.rp-sec[data-rp-toggle="' + key + '"]').forEach((x) => x.classList.toggle('open', open));
+      store.set('rpMovesOpen', open);
+      positionDetails();
+    });
+  }
+
   function renderDetails(h) {
     detailsHid = h.hid;
+
+    const rich = h.kind === 'pokemon' && !h.purchasedAt && hits.includes(h);
+    const rv = rich ? rpInit(h) : null;
+
+    $('mtal-details').classList.toggle('mtal-rich', rich);
 
     const r = h.raw || {};
     const stats =
@@ -2183,7 +2533,10 @@
     `;
 
     $('mtal-d-body').innerHTML = `
-      <div id="mtal-d-img">
+      ${
+        rich
+          ? rpHtml(h, rv)
+          : `      <div id="mtal-d-img">
         ${
           img
             ? `<img src="${esc(img)}" onerror="this.parentElement.textContent='❔'">`
@@ -2217,6 +2570,8 @@
       </div>
 
       ${pokeBlock}
+`
+      }
 
       ${
         h.at
@@ -2318,17 +2673,28 @@
             }
 
       <div id="mtal-d-actions">
-        <button type="button" id="mtal-d-buy">🛒 Comprar Agora</button>
+        <button type="button" id="mtal-d-buy">${h.currency === 'DIAMONDS' ? '💎' : '$'} Comprar Agora</button>
       </div>`
       }
-
-      <details class="mtal-d-raw">
-        <summary>dados brutos (debug)</summary>
-        <pre>${esc(
-          rawTxt
-        )}</pre>
-      </details>
     `;
+
+    if (rich) {
+      const root = $('mtal-d-body').querySelector('[data-rp-root]');
+
+      rpBind(root, rv);
+      rpApply(root, rv);
+
+      if (!root.querySelector('.rp-sprite img')) ensureSprite(h);
+
+      if (!rpCre) {
+        rpLoadCreatures().then((ok) => {
+          if (ok && detailsHid === h.hid && $('mtal-details').style.display === 'block') {
+            renderDetails(h);
+            positionDetails();
+          }
+        });
+      }
+    }
 
     if (
       !isPurchased &&
@@ -2451,6 +2817,7 @@
 
 
     if (
+      !rich &&
       !img &&
       h.kind === 'pokemon'
     ) {
@@ -2492,8 +2859,8 @@
     }
 
     d.style.left = left + 'px';
-    d.style.top = 'auto';
-    d.style.bottom = Math.max(0, window.innerHeight - r.bottom) + 'px';
+    d.style.bottom = 'auto';
+    d.style.top = Math.max(0, Math.min(r.top, window.innerHeight - d.offsetHeight)) + 'px';
   }
 
   function showDetails(h, anchor) {
@@ -3399,6 +3766,56 @@
     #mtal-details #mtal-d-buy,#mtal-details #mtal-d-npcgo{flex:1}
     #mtal-details #mtal-d-npcgo{background:#2c4a2c;border-color:#3f6b3f}
     #mtal-details #mtal-d-npcgo:hover{border-color:#b5934f}
+    #mtal-details.mtal-rich{width:400px}
+    #mtal-details.mtal-rich #mtal-d-price{border:1px solid #232840}
+    #mtal-details .rp-top{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+    #mtal-details .rp-sprite{flex:none;width:68px;height:68px;display:flex;align-items:center;justify-content:center;font-size:22px}
+    #mtal-details .rp-sprite img{max-width:100%;max-height:100%;image-rendering:pixelated}
+    #mtal-details .rp-id{min-width:0}
+    #mtal-details .rp-name{display:flex;align-items:baseline;gap:8px;font-size:17px;font-weight:700;color:#f2ead0}
+    #mtal-details .rp-name small{font-size:11px;font-weight:400;color:#7c829c}
+    #mtal-details .rp-types{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+    #mtal-details .rp-type{display:inline-flex;align-items:center;justify-content:center;height:20px;padding:0 10px;box-sizing:border-box;border-radius:999px;font-size:10px;font-weight:800;line-height:1;letter-spacing:.04em;text-transform:uppercase}
+    #mtal-details .rp-boxes{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+    #mtal-details .rp-box{display:flex;flex-direction:column;gap:5px;min-width:0;padding:8px;background:#1a1e30;border:1px solid #232840;border-radius:8px}
+    #mtal-details .rp-box > span{font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:#7c829c}
+    #mtal-details .rp-box b{font-size:15px}
+    #mtal-details .rp-box small{font-size:11px;font-weight:400;color:#7c829c}
+    #mtal-details .rp-ivt{color:#55e6d3}
+    #mtal-details .rp-pow{color:#f0c14b}
+    #mtal-details .rp-grade{display:flex;align-items:center;gap:12px;margin-top:8px;padding:10px;background:#1a1e30;border:1px solid #232840;border-radius:8px}
+    #mtal-details .rp-ring{flex:none;display:grid;place-items:center;width:52px;height:52px;border-radius:50%;background:conic-gradient(var(--c) var(--d),#2c3148 0)}
+    #mtal-details .rp-ring b{display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:#1a1e30;font-size:12px;color:var(--c)}
+    #mtal-details .rp-grade strong{font-size:14px}
+    #mtal-details .rp-grade p{margin:2px 0 0;font-size:11px;color:#9aa0b8}
+    #mtal-details .rp-sec{display:flex;align-items:center;gap:6px;margin:12px 0 6px;padding:8px 10px;background:#171a28;border:1px solid #2c3148;border-radius:8px;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#c7cbe0;cursor:pointer;user-select:none}
+    #mtal-details .rp-sec:hover{color:#f0d78c;border-color:#b5934f}
+    #mtal-details .rp-sec i{margin-left:auto;font-style:normal;transition:transform .15s}
+    #mtal-details .rp-sec.open i{transform:rotate(180deg)}
+    #mtal-details .rp-title{display:flex;align-items:center;gap:6px;margin:12px 0 6px;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#c7cbe0}
+    #mtal-details .rp-dim{font-weight:400;text-transform:none;letter-spacing:0;color:#7c829c}
+    #mtal-details .rp-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+    #mtal-details .rp-stat{padding:7px 8px;background:#1a1e30;border:1px solid #232840;border-radius:8px}
+    #mtal-details .rp-stat-h{display:flex;align-items:baseline;justify-content:space-between}
+    #mtal-details .rp-stat-h b{font-size:10.5px;letter-spacing:.04em;color:var(--c)}
+    #mtal-details .rp-stat-h span{font-size:10px;color:#7c829c}
+    #mtal-details .rp-stat-h em{font-style:normal;font-size:12.5px;font-weight:700;color:#55e6d3}
+    #mtal-details .rp-bar{height:5px;margin-top:5px;background:#2c3148;border-radius:3px;overflow:hidden}
+    #mtal-details .rp-bar i{display:block;height:100%;background:var(--c);border-radius:3px;transition:width .15s}
+    #mtal-details .rp-sec.rp-static{cursor:default}
+    #mtal-details .rp-sec.rp-static:hover{color:#c7cbe0;border-color:#2c3148}
+    #mtal-details .rp-move.locked{opacity:.4;filter:grayscale(.8)}
+    #mtal-details .rp-warn{margin-top:6px;font-size:10.5px;color:#f39a4b}
+    #mtal-details .rp-warn:empty{display:none}
+    #mtal-details .rp-moves{display:none;flex-direction:column;gap:5px}
+    #mtal-details .rp-moves.open{display:flex}
+    #mtal-details .rp-move{display:flex;align-items:center;gap:8px;padding:6px 8px;background:#1a1e30;border:1px solid #232840;border-radius:8px}
+    #mtal-details .rp-move .rp-type{height:18px;padding:0 8px;font-size:9px}
+    #mtal-details .rp-move b{font-size:12px;color:#f2ead0}
+    #mtal-details .rp-move small{font-size:10.5px;color:#7c829c}
+    #mtal-details .rp-move em{margin-left:auto;font-style:normal;font-weight:700;color:#ff9f43}
+    #mtal-details .rp-foot{display:flex;justify-content:space-between;gap:8px;margin-top:10px;font-size:10.5px;color:#7c829c}
+    #mtal-details .rp-foot b{color:#f0d78c}
     #mtal-mk .mk-modes{display:flex;gap:4px;padding-right:12px;border-right:1px solid #2c3148}
     #mtal-mk .mk-mode.active{background:#3d3420;border-color:#c9a44a;color:#f0d78c}
     #mtal-mk .mk-npcs{display:flex;flex-wrap:wrap;gap:4px}
