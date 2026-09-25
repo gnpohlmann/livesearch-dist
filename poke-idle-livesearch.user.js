@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.4.51
+// @version      0.4.55
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -20,7 +20,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.51';
+  const VERSION = '0.4.55';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -29,13 +29,14 @@
   const CATEGORY_LABELS = { Diamonds: 'Diamantes' };
   const catLabel = (c) => CATEGORY_LABELS[c] || c || '';
   const NPCS = [
-    { key: 'shop', label: '🛒 Loja', title: 'Loja', idx: 79, re: /abrir loja$/i },
-    { key: 'depot', label: '📦 Depot', title: 'Depósito', idx: 86, re: /abrir dep[oó]sito/i },
-    { key: 'flint', label: '💎 Stones', title: 'Stone Researcher', idx: 81, re: /stone researcher/i },
-    { key: 'tm', label: '💿 TMs', title: 'TM Researcher', idx: 82, re: /tm researcher/i },
-    { key: 'held', label: '🎰 Held', title: 'Held Machine', idx: 83, re: /held machine/i },
-    { key: 'trader', label: '🦖 Trader', title: 'Pokemaniac Trader', idx: 80, re: /pokemaniac/i }
+    { key: 'shop', label: 'Loja', title: 'Loja', idx: 79, re: /abrir loja$/i },
+    { key: 'depot', label: 'Depot', title: 'Depósito', idx: 86, re: /abrir dep[oó]sito/i },
+    { key: 'flint', label: 'Stones', title: 'Stone Researcher', idx: 81, re: /stone researcher/i },
+    { key: 'tm', label: 'TMs', title: 'TM Researcher', idx: 82, re: /tm researcher/i },
+    { key: 'held', label: 'Held', title: 'Held Machine', idx: 83, re: /held machine/i },
+    { key: 'trader', label: 'Trader', title: 'Pokemaniac Trader', idx: 80, re: /pokemaniac/i }
   ];
+  const MK_CAT_ICON = { all: '▦', Items: '🎒', Stones: '💎', 'Poke Balls': '🔴', Diamonds: '💠', pokemon: '🐾' };
   const MK_CATS = [['all', 'Todos'], ['Items', 'Itens'], ['Stones', 'Stones'], ['Poke Balls', 'Poké Balls'], ['Diamonds', 'Diamantes'], ['pokemon', 'Pokémon']];
   const DEBUG = true;
 
@@ -280,6 +281,18 @@
 
       try {
         const u = String((input && input.url) || input || '');
+
+        if (u.includes('/api/game/')) {
+          res
+            .then((r) => r.clone().json())
+            .then((d) => {
+              try {
+                walletScan(d, 0);
+                walletRender();
+              } catch (e) {}
+            })
+            .catch(() => {});
+        }
 
         if (u.includes('/api/game/depot')) {
           res
@@ -3030,6 +3043,11 @@
   async function tick() {
     try {
       readOwnedFromMarket();
+
+      if (marketOpen()) {
+        walletFromGameMarket();
+        walletRender();
+      }
     } catch (e) {}
 
     try {
@@ -3721,12 +3739,12 @@
     #mtal-mk{position:fixed;left:16px;top:4vh;width:min(1480px,calc(100vw - 440px));min-width:760px;height:92vh;z-index:2147483646;background:#12141f;color:#e8e3d0;border:1px solid #c9a44a;border-radius:10px;font:12px/1.4 Inter,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.6);display:none;flex-direction:column;overflow:hidden}
     #mtal-mk [hidden]{display:none!important}
     #mtal-mk button{background:#252a3d;color:#e8e3d0;border:1px solid #4a4f66;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px}
-    #mtal-mk button:hover{border-color:#b5934f}
+    #mtal-mk button:hover{border-color:#e8eaf2}
     #mtal-mk button:disabled{opacity:.6;cursor:default}
     #mtal-mk .mk-head{display:flex;align-items:center;gap:12px;padding:10px 12px;border-bottom:1px solid #232840}
     #mtal-mk .mk-head b{color:#e0b95a;font-size:14px}
     #mtal-mk .mk-cats{display:flex;gap:4px}
-    #mtal-mk .mk-cat.active{background:#3d3420;border-color:#c9a44a;color:#f0d78c}
+    #mtal-mk .mk-cat.active{background:#e8eaf2;border-color:#e8eaf2;color:#12141f}
     #mtal-mk .mk-filters{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:10px 12px 8px}
     #mtal-mk .mk-f{display:inline-flex;align-items:center;gap:5px;color:#9aa0b8}
     #mtal-mk label.mk-f{cursor:pointer}
@@ -3738,9 +3756,34 @@
     #mtal-mk .mk-chip{padding:3px 11px;border-radius:999px;background:transparent;font-size:11px;font-weight:600;opacity:.5}
     #mtal-mk .mk-chip.on{opacity:1;background:#1a1e30}
     #mtal-mk .mk-body{flex:1;min-height:0;display:grid;grid-template-columns:150px 230px minmax(0,1fr);border-top:1px solid #232840}
-    #mtal-mk .mk-side{display:flex;flex-direction:column;gap:4px;padding:10px;border-right:1px solid #232840;overflow:auto}
-    #mtal-mk .mk-side .mk-cat{text-align:left;padding:9px 12px;font-weight:600}
-    #mtal-mk .mk-fcol{display:flex;flex-direction:column;gap:12px;padding:10px 12px;border-right:1px solid #232840;overflow:auto;scrollbar-width:thin}
+    #mtal-mk .mk-side{display:flex;flex-direction:column;gap:2px;padding:10px 8px;border-right:1px solid #232840;overflow:auto}
+    #mtal-mk .mk-side .mk-cat{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;background:transparent;border:none;border-radius:6px;text-align:left;font-weight:600;color:#9aa0b8;box-shadow:none}
+    #mtal-mk .mk-wallet{margin-top:auto;display:flex;flex-direction:column;gap:4px;padding:10px;border-top:1px solid #232840;font-size:11.5px;color:#9aa0b8}
+    #mtal-mk .mk-wallet b{color:#f2ead0;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #mtal-mk .mk-wallet em{font-style:normal;font-weight:700;color:#f0d78c}
+    #mtal-mk .mk-side .mk-cat i{width:18px;font-style:normal;font-size:13px;text-align:center;opacity:.8}
+    #mtal-mk .mk-side .mk-cat:hover{background:#1a1e30;color:#e8e3d0}
+    #mtal-mk .mk-side .mk-cat.active{background:#262b3f;color:#fff;box-shadow:inset 3px 0 0 #e8eaf2}
+    #mtal-mk .mk-side .mk-cat.active i{opacity:1}
+    #mtal-mk .mk-fcol{display:flex;flex-direction:column;padding:0;border-right:1px solid #232840;overflow:auto;scrollbar-width:thin}
+    #mtal-mk .mk-fhead{display:flex;align-items:center;justify-content:space-between;padding:12px 14px 10px}
+    #mtal-mk .mk-link{padding:0;background:none;border:none;color:#9aa0b8;font-size:11px;text-decoration:underline;text-underline-offset:2px}
+    #mtal-mk .mk-link:hover{color:#fff}
+    #mtal-mk .mk-fgroup{display:flex;flex-direction:column;gap:6px;padding:12px 14px;border-top:1px solid #232840}
+    #mtal-mk .mk-flabel{margin-top:6px;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#7c829c}
+    #mtal-mk .mk-flabel:first-child{margin-top:0}
+    #mtal-mk .mk-fcol input[type=text],#mtal-mk .mk-fcol select{height:30px;padding:0 9px;background:#0d0f18;border:1px solid #2c3148;border-radius:6px;color:#e8e3d0;font-size:12px}
+    #mtal-mk .mk-fcol input[type=text]:focus,#mtal-mk .mk-fcol select:focus{outline:none;border-color:#e8eaf2}
+    #mtal-mk .mk-search,#mtal-mk .mk-prefix{position:relative}
+    #mtal-mk .mk-search i,#mtal-mk .mk-prefix b{position:absolute;left:9px;top:50%;transform:translateY(-50%);font-style:normal;font-size:12px;font-weight:600;color:#7c829c;pointer-events:none}
+    #mtal-mk .mk-search input[type=text]{padding-left:26px}
+    #mtal-mk .mk-prefix input[type=text]{padding-left:28px}
+    #mtal-mk .mk-switch{display:flex;align-items:center;gap:8px;margin-top:6px;color:#c7cbe0;font-size:12px;cursor:pointer;user-select:none}
+    #mtal-mk .mk-switch input{position:absolute;opacity:0;width:0;height:0}
+    #mtal-mk .mk-switch i{position:relative;flex:none;width:30px;height:16px;background:#2c3148;border-radius:999px;transition:background .15s}
+    #mtal-mk .mk-switch i::after{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;background:#9aa0b8;border-radius:50%;transition:transform .15s,background .15s}
+    #mtal-mk .mk-switch input:checked + i{background:#e8eaf2}
+    #mtal-mk .mk-switch input:checked + i::after{transform:translateX(14px);background:#12141f}
     #mtal-mk .mk-fh{color:#e0b95a;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
     #mtal-mk .mk-fl{display:flex;flex-direction:column;gap:5px;color:#9aa0b8;font-size:11px}
     #mtal-mk .mk-fcol input[type=text],#mtal-mk .mk-fcol select{width:100%}
@@ -3748,7 +3791,10 @@
     #mtal-mk .mk-range input[type=text]{flex:1;min-width:0}
     #mtal-mk .mk-range i{font-style:normal;color:#7c829c}
     #mtal-mk .mk-chk{display:flex;align-items:center;gap:6px;color:#c7cbe0;cursor:pointer}
-    #mtal-mk .mk-fcol .mk-chips{padding:0}
+    #mtal-mk .mk-fcol .mk-chips{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:0}
+    #mtal-mk .mk-fcol .mk-chip{padding:5px 0;border:1px solid #2c3148;border-radius:6px;opacity:.75}
+    #mtal-mk .mk-fcol .mk-chip:hover{opacity:1;border-color:#4a4f66}
+    #mtal-mk .mk-fcol .mk-chip.on{opacity:1;border-color:currentColor;background:color-mix(in srgb,currentColor 14%,transparent)}
     #mtal-mk .mk-res{display:flex;flex-direction:column;min-width:0;min-height:0}
     #mtal-mk .mk-table-wrap{flex:1;min-height:0;overflow:auto;scrollbar-width:thin}
     #mtal-mk table{width:100%;border-collapse:collapse}
@@ -3777,25 +3823,29 @@
     #mtal-mk .mkc-views button{width:30px;height:26px;padding:0;font-size:13px;border-radius:0}
     #mtal-mk .mkc-views button:first-child{border-radius:6px 0 0 6px}
     #mtal-mk .mkc-views button:last-child{border-radius:0 6px 6px 0;border-left:none}
-    #mtal-mk .mkc-views button.on{background:#3d3420;border-color:#c9a44a;color:#f0d78c}
-    #mtal-mk .mkc-gridrow td{padding:4px 10px;border-bottom:none;background:transparent!important}
+    #mtal-mk .mkc-views button.on{background:#e8eaf2;border-color:#e8eaf2;color:#12141f}
+    #mtal-mk .mkc-gridrow td{padding:10px;border-bottom:none;background:transparent!important}
     #mtal-mk .mkc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
-    #mtal-mk .mkc-grid .mkc{height:100%;box-sizing:border-box;grid-template-columns:minmax(0,1fr);grid-template-areas:"sp" "id" "grade" "stats" "side";justify-items:center;align-content:start;gap:10px;text-align:center}
-    #mtal-mk .mkc-grid .mkc-sp{width:80px;height:80px}
-    #mtal-mk .mkc-grid .mkc-id{width:100%}
+    #mtal-mk .mkc-grid .mkc{height:100%;box-sizing:border-box;grid-template-columns:64px minmax(0,1fr);grid-template-areas:"sp id" "grade grade" "stats stats" "side side";align-content:start;gap:12px}
     #mtal-mk .mkc-grid .mkc-name{white-space:normal}
-    #mtal-mk .mkc-grid .mkc-types{justify-content:center}
-    #mtal-mk .mkc-grid .mkc-grade{text-align:left}
-    #mtal-mk .mkc-grid .mkc-stats{width:100%;text-align:left;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:none;grid-auto-flow:row;gap:8px 14px;padding-top:10px;border-top:1px solid #232840}
-    #mtal-mk .mkc-grid .mkc-side{width:100%;flex-direction:row;align-items:center;justify-content:space-between;padding-top:10px;border-top:1px solid #232840}
+    #mtal-mk .mkc-grid .mkc-grade{padding-top:12px;border-top:1px solid #232840}
+    #mtal-mk .mkc-grid .mkc-stats{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:none;grid-auto-flow:row;gap:8px 14px;padding-top:10px;border-top:1px solid #232840}
+    #mtal-mk .mkc-grid .mkc-side{flex-direction:row;align-items:center;justify-content:space-between;padding-top:10px;border-top:1px solid #232840}
     #mtal-mk .mkc-cell:hover .mkc{border-color:#4a4f66}
-    #mtal-mk .mkc-cell.on .mkc{border-color:#c9a44a;background:#211f1a}
-    #mtal-mk .mkc-sort.on{background:#3d3420;border-color:#c9a44a;color:#f0d78c}
-    #mtal-mk .mkc-row td{padding:4px 10px;border-bottom:none;background:transparent!important}
+    #mtal-mk #mk-sell{container-type:inline-size}
+    #mtal-mk .mkc-list{display:flex;flex-direction:column;gap:10px}
+    #mtal-mk .sl-pk{cursor:pointer}
+    #mtal-mk .sl-pk:hover .mkc{border-color:#4a4f66}
+    #mtal-mk .sl-pk.on .mkc{border-color:#c7cbe0;background:#1e2336}
+    #mtal-mk .mkc-cell.on .mkc{border-color:#c7cbe0;background:#1e2336}
+    #mtal-mk .mkc-sort.on{background:#e8eaf2;border-color:#e8eaf2;color:#12141f}
+    #mtal-mk .mkc-row td{padding:5px 10px;border-bottom:none;background:transparent!important}
+    #mtal-mk .mkc-row:first-child td{padding-top:10px}
+    #mtal-mk .mkc-row:last-child td{padding-bottom:10px}
     #mtal-mk table.mkc-table{table-layout:fixed}
     #mtal-mk .mkc{display:grid;grid-template-columns:64px 200px 150px minmax(240px,420px) minmax(0,1fr) 120px;grid-template-areas:"sp id grade stats . side";align-items:center;gap:18px;padding:10px 12px;background:#1a1e30;border:1px solid #232840;border-radius:10px;white-space:normal;cursor:pointer}
     #mtal-mk .mkc-row:hover .mkc{border-color:#4a4f66}
-    #mtal-mk .mkc-row.on .mkc{border-color:#c9a44a;background:#211f1a}
+    #mtal-mk .mkc-row.on .mkc{border-color:#c7cbe0;background:#1e2336}
     #mtal-mk .mkc-sp{grid-area:sp;align-self:center;width:64px;height:64px;display:flex;align-items:center;justify-content:center;font-size:20px}
     #mtal-mk .mkc-sp img{max-width:100%;max-height:100%;image-rendering:pixelated}
     #mtal-mk .mkc-id{grid-area:id;min-width:0}
@@ -3837,12 +3887,12 @@
     #mtal-mk .mk-seg button{border-radius:0}
     #mtal-mk .mk-seg button:first-child{border-radius:6px 0 0 6px}
     #mtal-mk .mk-seg button:last-child{border-radius:0 6px 6px 0;border-left:none}
-    #mtal-mk .mk-seg button.on{background:#3d3420;border-color:#c9a44a;color:#f0d78c}
+    #mtal-mk .mk-seg button.on{background:#e8eaf2;border-color:#e8eaf2;color:#12141f}
     #mtal-mk #sl-filter{width:180px}
     #mtal-mk .sl-grid{flex:1;min-height:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));grid-auto-rows:max-content;align-content:start;gap:8px;margin:10px 0;overflow:auto;padding:2px;scrollbar-width:thin}
     #mtal-mk .sl-grid .mk-empty{grid-column:1/-1}
     #mtal-mk .sl-card{display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 6px;background:#1a1e30;border:1px solid #2c3148;border-radius:8px;min-width:0}
-    #mtal-mk .sl-card.on{border-color:#c9a44a;background:#2a2716}
+    #mtal-mk .sl-card.on{border-color:#c7cbe0;background:#1e2336}
     #mtal-mk .sl-thumb{width:44px;height:44px;display:flex;align-items:center;justify-content:center;font-size:16px}
     #mtal-mk .sl-thumb img{max-width:100%;max-height:100%;image-rendering:pixelated}
     #mtal-mk .sl-cname{font-size:11px;font-weight:600;color:#f2ead0;line-height:1.2;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -3851,11 +3901,11 @@
     #mtal-mk #sl-rar{padding:0}
     #mtal-mk .sl-grid.list{display:block}
     #mtal-mk .sl-row,#mtal-mk .mtal-mkrow{cursor:pointer}
-    #mtal-mk .mtal-mkrow.on td{background:#2a2716}
-    #mtal-mk .sl-row.on td{background:#2a2716}
+    #mtal-mk .mtal-mkrow.on td{background:#1e2336}
+    #mtal-mk .sl-row.on td{background:#1e2336}
     #mtal-mk .sl-table{width:100%}
     #mtal-mk .mk-coll{cursor:pointer;user-select:none;display:flex;align-items:center;gap:8px;padding:10px 12px;background:#171a28;border:1px solid #2c3148;border-radius:8px;transition:border-color .15s,color .15s}
-    #mtal-mk .mk-coll:hover{color:#f0d78c;border-color:#b5934f}
+    #mtal-mk .mk-coll:hover{color:#fff;border-color:#e8eaf2}
     #mtal-mk .mk-coll::after{content:'clique para expandir/recolher';margin-left:auto;font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;color:#7c829c}
     #mtal-d-price.mtal-d-sell{text-align:left}
     .mtal-d-sellrow{display:flex;gap:6px;margin:4px 0 8px}
@@ -3923,10 +3973,10 @@
     #mtal-details .rp-foot{display:flex;justify-content:space-between;gap:8px;margin-top:10px;font-size:10.5px;color:#7c829c}
     #mtal-details .rp-foot b{color:#f0d78c}
     #mtal-mk .mk-modes{display:flex;gap:4px;padding-right:12px;border-right:1px solid #2c3148}
-    #mtal-mk .mk-mode.active{background:#3d3420;border-color:#c9a44a;color:#f0d78c}
+    #mtal-mk .mk-mode.active{background:#e8eaf2;border-color:#e8eaf2;color:#12141f}
     #mtal-mk .mk-npcs{display:flex;flex-wrap:wrap;gap:4px}
     #mtal-mk .mk-npc{padding:5px 9px;color:#c7cbe0}
-    #mtal-mk .mk-npc.active{background:#3d3420;border-color:#c9a44a;color:#f0d78c}
+    #mtal-mk .mk-npc.active{background:#e8eaf2;border-color:#e8eaf2;color:#12141f}
     #mtal-mk:not([data-mode^="npc"]) .mk-npcv{display:none!important}
     #mtal-mk #mk-npc{flex:1;min-height:0;overflow:auto;padding:0 12px 12px;scrollbar-width:thin}
     #mtal-mk .npc-head{display:flex;align-items:center;gap:12px;margin-top:12px}
@@ -3941,7 +3991,7 @@
     #mtal-mk .npc-list{display:flex;flex-direction:column;gap:6px;margin-top:6px}
     #mtal-mk .npc-row{display:flex;align-items:center;gap:10px;padding:8px 10px;background:#1a1e30;border:1px solid #2c3148;border-radius:8px;cursor:pointer}
     #mtal-mk .npc-row:hover{border-color:#4a4f66}
-    #mtal-mk .npc-row.on{border-color:#c9a44a;background:#2a2716}
+    #mtal-mk .npc-row.on{border-color:#c7cbe0;background:#1e2336}
     #mtal-mk .npc-ri{width:36px;height:36px;flex:none;display:flex;align-items:center;justify-content:center}
     #mtal-mk .npc-ri img{max-width:100%;max-height:100%;image-rendering:pixelated}
     #mtal-mk .npc-rn{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
@@ -3954,7 +4004,7 @@
     #mtal-mk .npc-primary:disabled{opacity:.5;cursor:default}
     #mtal-mk .npc-bulk{display:flex;align-items:center;gap:12px;margin-top:12px}
     #mtal-mk .npc-bulk button{background:#2c4a2c;border-color:#3f6b3f;padding:8px 14px;font-weight:600}
-    #mtal-mk .npc-bulk button:hover{border-color:#b5934f}
+    #mtal-mk .npc-bulk button:hover{border-color:#e8eaf2}
     #mtal-mk #mk-sell{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:0 12px 12px}
     #mtal-mk #mk-sell .sl-anun{flex:1;min-height:0;display:flex;flex-direction:column}
     #mtal-mk #mk-sell .sl-anun .mk-form,#mtal-mk #mk-sell .sl-anun .sl-bar{flex:none}
@@ -4280,7 +4330,7 @@
 
         <div class="mk-modes">
           <button type="button" class="mk-mode active" data-mode="buy">Comprar</button>
-          <button type="button" class="mk-mode" data-mode="sell">Vendas</button>
+          <button type="button" class="mk-mode" data-mode="sell">Vender</button>
           <button type="button" class="mk-mode" data-mode="hist">Histórico</button>
         </div>
 
@@ -4301,85 +4351,95 @@
         <nav class="mk-side">
           ${MK_CATS.map(
             ([v, l]) =>
-              `<button type="button" class="mk-cat" data-cat="${esc(v)}">${esc(l)}</button>`
+              `<button type="button" class="mk-cat" data-cat="${esc(v)}"><i>${MK_CAT_ICON[v] || ''}</i><span>${esc(l)}</span></button>`
           ).join('')}
+
+          <div class="mk-wallet" id="mk-wallet">
+            <b id="mk-nick">-</b>
+            <span>$ <em id="mk-gold">-</em></span>
+            <span>💎 <em id="mk-dia">-</em></span>
+          </div>
         </nav>
 
         <aside class="mk-fcol" id="mk-filters">
-          <div class="mk-fh">Filtros</div>
+          <div class="mk-fhead">
+            <span class="mk-fh">Filtros</span>
+            <button type="button" id="mk-clear" class="mk-link">Limpar</button>
+          </div>
 
-          <label class="mk-fl">
-            <span>Buscar</span>
-            <input type="text" id="mk-q" autocomplete="off">
-          </label>
+          <div class="mk-fgroup">
+            <div class="mk-search">
+              <i>⌕</i>
+              <input type="text" id="mk-q" autocomplete="off">
+            </div>
+          </div>
 
-          <div class="mk-fl mk-poke">
-            <span>IV total</span>
+          <div class="mk-fgroup mk-poke">
+            <div class="mk-flabel">IV total</div>
             <div class="mk-range">
               <input type="text" id="mk-iv1" placeholder="mín" inputmode="numeric">
               <i>–</i>
               <input type="text" id="mk-iv2" placeholder="máx" inputmode="numeric">
             </div>
-          </div>
 
-          <div class="mk-fl mk-poke">
-            <span>Nível</span>
+            <div class="mk-flabel">Nível</div>
             <div class="mk-range">
               <input type="text" id="mk-lv1" placeholder="mín" inputmode="numeric">
               <i>–</i>
               <input type="text" id="mk-lv2" placeholder="máx" inputmode="numeric">
             </div>
+
+            <div class="mk-flabel">Qualidade mínima</div>
+            <div class="mk-prefix"><b>×</b><input type="text" id="mk-qmin" placeholder="1.40" inputmode="decimal"></div>
           </div>
 
-          <label class="mk-fl mk-poke">
-            <span>Qualidade mín (×)</span>
-            <input type="text" id="mk-qmin" placeholder="1.40" inputmode="decimal">
-          </label>
+          <div class="mk-fgroup mk-poke">
+            <div class="mk-flabel">Tipo</div>
+            <select id="mk-type">
+              <option value="">Todos os tipos</option>
+              ${Object.entries(RP_TYPE_PT)
+                .map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`)
+                .join('')}
+            </select>
 
-          <div class="mk-fl mk-poke">
-            <span>Raridade</span>
+            <div class="mk-flabel">Raridade</div>
             <div class="mk-chips" id="mk-chips">
               ${QUALITY_TIERS.slice()
                 .reverse()
                 .map(([, l]) => {
                   const c = RARITY_COLOR[l.toLowerCase()] || '#c7cbe0';
 
-                  return `<button type="button" class="mk-chip" data-r="${esc(l)}" style="color:${c};border-color:${c}">${esc(l)}</button>`;
+                  return `<button type="button" class="mk-chip" data-r="${esc(l)}" style="color:${c}">${esc(l)}</button>`;
                 })
                 .join('')}
             </div>
+
+            <label class="mk-switch">
+              <input type="checkbox" id="mk-shiny">
+              <i></i>
+              Só shiny ✨
+            </label>
           </div>
 
-          <label class="mk-chk mk-poke">
-            <input type="checkbox" id="mk-shiny">
-            ✨ Só shiny
-          </label>
+          <div class="mk-fgroup mk-item">
+            <label class="mk-switch">
+              <input type="checkbox" id="mk-npc">
+              <i></i>
+              Abaixo do preço do NPC
+            </label>
+          </div>
 
-          <label class="mk-chk mk-item">
-            <input type="checkbox" id="mk-npc">
-            Abaixo do NPC
-          </label>
-
-          <label class="mk-fl">
-            <span>Moeda</span>
+          <div class="mk-fgroup">
+            <div class="mk-flabel">Preço máximo</div>
             <select id="mk-cur">
-              <option value="">Todas moedas</option>
+              <option value="">Todas as moedas</option>
               <option value="GOLD">$ Dólares</option>
               <option value="DIAMONDS">💎 Diamantes</option>
             </select>
-          </label>
 
-          <label class="mk-fl" id="mk-pg-wrap">
-            <span>Preço máx ($ Dólares)</span>
-            <input type="text" id="mk-pmax-g" placeholder="sem limite" inputmode="numeric">
-          </label>
-
-          <label class="mk-fl" id="mk-pd-wrap">
-            <span>Preço máx (💎 Diamantes)</span>
-            <input type="text" id="mk-pmax-d" placeholder="sem limite" inputmode="numeric">
-          </label>
-
-          <button type="button" id="mk-clear">Limpar filtros</button>
+            <div class="mk-prefix" id="mk-pg-wrap"><b>$</b><input type="text" id="mk-pmax-g" placeholder="sem limite" inputmode="numeric"></div>
+            <div class="mk-prefix" id="mk-pd-wrap"><b>💎</b><input type="text" id="mk-pmax-d" placeholder="sem limite" inputmode="numeric"></div>
+          </div>
         </aside>
 
         <section class="mk-res">
@@ -6159,6 +6219,7 @@
       shiny: $('mk-shiny').checked,
       npc: $('mk-npc').checked,
       cur: $('mk-cur').value,
+      type: $('mk-type').value,
       pmaxG: mkNum('mk-pmax-g', true),
       pmaxD: mkNum('mk-pmax-d', true)
     };
@@ -6273,8 +6334,37 @@
       if (req === mk.req) {
         mk.loading = false;
         mkRender();
+        mkAutoMore();
       }
     }
+  }
+
+  function mkClientFiltered() {
+    const f = mkFilters();
+
+    return !!(
+      (f.text && !f.speciesId) ||
+      f.ivMax != null ||
+      f.lvMin != null ||
+      f.lvMax != null ||
+      f.shiny ||
+      mk.rar.size ||
+      f.type ||
+      f.cur ||
+      f.pmaxG != null ||
+      f.pmaxD != null
+    );
+  }
+
+  let mkAutoT = null;
+
+  function mkAutoMore() {
+    clearTimeout(mkAutoT);
+
+    if (mk.cat !== 'pokemon' || mk.done || mk.loading || !mkClientFiltered()) return;
+    if (mkVisible().length >= 60 || mk.page > 80) return;
+
+    mkAutoT = setTimeout(() => mkLoad(false), 200);
   }
 
   function mkVisible() {
@@ -6291,6 +6381,7 @@
         if (f.qMin != null && !(h.quality >= f.qMin)) return false;
         if (f.shiny && !h.shiny) return false;
         if (mk.rar.size && !mk.rar.has(rarityOf(h))) return false;
+        if (f.type && !typesOf(h.raw || {}).some((t) => String(t).toLowerCase() === f.type)) return false;
       } else if (f.npc && !h.belowNpc) {
         return false;
       }
@@ -6330,7 +6421,7 @@
     return out;
   }
 
-  function mkPokeCard(h) {
+  function mkPokeCard(h, side) {
     const v = rpInit(h);
     const R = rpCompute(v);
     const r = h.raw || {};
@@ -6377,12 +6468,12 @@
         }).join('')}
       </div>
 
-      <div class="mkc-side">
+      ${side != null ? side : `      <div class="mkc-side">
         <div class="mk-price">${esc(h.offerOnly ? 'Apenas ofertas' : [currencyIcon(h.currency), fmt(h.price)].filter(Boolean).join(' '))}</div>
         <div class="mk-acts">
           ${h.buyable ? `<button type="button" class="mk-buy" data-hid="${h.hid}" title="Comprar">Comprar</button>` : ''}
         </div>
-      </div>
+      </div>`}
     </div>`;
   }
 
@@ -6507,14 +6598,87 @@
     rows.filter((h) => !(h.kind === 'pokemon' && mk.cat !== 'all' && rpSprite(h, rpCreature(h)))).forEach(ensureSprite);
 
     $('mk-count').textContent =
-      rows.length + ' de ' + mk.rows.length + ' carregados' + (mk.loading && mk.rows.length ? ' · carregando…' : '');
+      rows.length +
+      ' de ' +
+      mk.rows.length +
+      ' carregados' +
+      (mk.loading && mk.rows.length ? (mkClientFiltered() ? ' · buscando em mais páginas…' : ' · carregando…') : '');
 
     $('mk-more').hidden = !poke || mk.done;
     $('mk-more').disabled = mk.loading;
   }
 
+  const wallet = { gold: null, dia: null };
+
+  function walletScan(d, depth) {
+    if (!d || typeof d !== 'object' || depth > 3) return;
+
+    for (const k in d) {
+      const v = d[k];
+
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        if (/^(my)?(gold|dollars?|money)$/i.test(k)) wallet.gold = v;
+        else if (/^(my)?diamonds?$/i.test(k)) wallet.dia = v;
+      } else if (v && typeof v === 'object' && !Array.isArray(v) && (!v.constructor || v.constructor.name === 'Object')) {
+        walletScan(v, depth + 1);
+      }
+    }
+  }
+
+  function walletFromGame() {
+    const f = findGameFiber();
+
+    if (!f) return;
+
+    const p = f.memoizedProps || {};
+
+    if (p.trainerName) $('mk-nick').textContent = p.trainerName;
+
+    hookNodes(f).forEach((h) => {
+      const v = h.queue ? h.queue.lastRenderedState : h.memoizedState;
+
+      if (v && typeof v === 'object' && !Array.isArray(v) && !(v.constructor && v.constructor.name !== 'Object')) walletScan(v, 1);
+    });
+  }
+
+  function walletRender() {
+    if ($('mk-gold')) $('mk-gold').textContent = wallet.gold != null ? fmt(wallet.gold) : '-';
+    if ($('mk-dia')) $('mk-dia').textContent = wallet.dia != null ? fmt(wallet.dia) : '-';
+  }
+
+  function walletFromGameMarket() {
+    const win = marketRoot();
+
+    if (!win) return;
+
+    const m = /([\d.,]+)\s*dollars?[^\d]*([\d.,]+)?/i.exec(win.textContent.replace(/\s+/g, ' '));
+
+    if (!m) return;
+
+    const n = (x) => Number(String(x).replace(/[.,\s]/g, ''));
+
+    wallet.gold = n(m[1]);
+
+    if (m[2] != null) wallet.dia = n(m[2]);
+  }
+
+  async function walletRefresh() {
+    try {
+      walletFromGame();
+      walletFromGameMarket();
+    } catch (e) {}
+
+    try {
+      walletScan(await gameGet('/api/game/shop'), 0);
+    } catch (e) {}
+
+    walletRender();
+  }
+
   function mkOpen() {
     $('mtal-mk').style.display = 'flex';
+
+    walletRefresh();
 
     if (!species) loadSpecies();
 
@@ -6569,6 +6733,7 @@
 
     c.classList.toggle('on', mk.rar.has(r));
     mkRender();
+    mkAutoMore();
   });
 
   let mkTimer = null;
@@ -6581,6 +6746,7 @@
         mkLoad(true);
       } else {
         mkRender();
+        mkAutoMore();
       }
     }, 350);
   };
@@ -6598,6 +6764,7 @@
     });
 
     $('mk-cur').value = '';
+    $('mk-type').value = '';
     mk.rar.clear();
     document.querySelectorAll('#mtal-mk .mk-chip').forEach((c) => c.classList.remove('on'));
     mkOnFilter();
@@ -6957,11 +7124,34 @@
         .map((t) => `<span style="color:${TYPE_COLOR[String(t).toLowerCase()] || '#c7cbe0'}">${esc(cap(t))}</span>`)
         .join(' / ') || '-';
 
-    grid.classList.toggle('list', list);
+    grid.classList.toggle('list', list || poke);
 
     let html;
 
-    if (!cards.length) {
+    if (poke && cards.length) {
+      html = `<div class="${list ? 'mkc-list' : 'mkc-grid'}">${cards
+        .map((c) => {
+          const key = slKey(c);
+          const h = { ...slInvHit(c), invRef: c };
+
+          if (!rpSprite(h, rpCreature(h))) pseudo.push(h);
+
+          return `<div class="sl-pk${key === sl.sel ? ' on' : ''}" data-key="${esc(key)}">${mkPokeCard(
+            h,
+            `<div class="mkc-side">
+              <div class="mk-price">${c.sellValue != null ? '<span class="mk-dim">NPC</span> $ ' + fmt(c.sellValue) : ''}</div>
+              <div class="mk-acts"><button type="button">Anunciar</button></div>
+            </div>`
+          )}</div>`;
+        })
+        .join('')}</div>`;
+
+      if (!rpCre) {
+        rpLoadCreatures().then((ok) => {
+          if (ok && sl.kind === 'pokemon') slRenderOwned();
+        });
+      }
+    } else if (!cards.length) {
       html = `<div class="mk-empty">${
         poke
           ? sl.pokes.length
