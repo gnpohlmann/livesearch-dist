@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.4.89
+// @version      0.4.90
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -21,7 +21,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.89';
+  const VERSION = '0.4.90';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -8328,6 +8328,12 @@
         if (wallet.dia == null) wallet.dia = d0;
       } catch (e) {}
     }
+
+    try {
+      const dd = await gameGet('/api/game/diamonds');
+
+      if (dd && typeof dd.diamonds === 'number') wallet.dia = dd.diamonds;
+    } catch (e) {}
 
     walletRender();
   }
