@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.6.0
+// @version      0.7.2
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -21,7 +21,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.6.0';
+  const VERSION = '0.7.2';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -235,7 +235,7 @@
   }
 
   const capSeen = new WeakSet();
-  const wsSt = { sock: null, pokes: null, fam: null, waits: [], seen: new WeakSet(), wseen: new WeakSet(), kseen: new WeakSet(), sends: [] };
+  const wsSt = { sock: null, pokes: null, fam: null, waits: [], seen: new WeakSet(), wseen: new WeakSet(), kseen: new WeakSet(), mseen: new WeakSet(), onMsg: null, sends: [] };
 
   function wsIn(ev, v) {
     try {
@@ -243,6 +243,14 @@
 
       if ((!wsSt.sock || wsSt.sock.readyState !== 1) && tg && typeof tg.send === 'function' && 'readyState' in tg && !/livesearch/i.test(String(tg.url || ''))) wsSt.sock = tg;
     } catch (e) {}
+
+    if (typeof v === 'string' && wsSt.onMsg && !wsSt.mseen.has(ev)) {
+      wsSt.mseen.add(ev);
+
+      try {
+        wsSt.onMsg(v);
+      } catch (e) {}
+    }
 
     if (typeof v !== 'string' || wsSt.seen.has(ev)) return;
 
@@ -4159,8 +4167,9 @@
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     #mtal-fab-row,#mtal-fab-row *,#mtal-panel,#mtal-panel *,#mtal-details,#mtal-details *,#mtal-mk,#mtal-mk *{font-family:Inter,sans-serif!important}
     #mtal-fab-row{position:fixed;left:16px;bottom:16px;z-index:2147483646;display:flex;align-items:center;gap:8px}
-    #mtal-fab{background:#252a3d;color:#e8e3d0;border:1px solid #4a4f66;border-radius:8px;padding:8px 12px;font:bold 13px Inter,sans-serif;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.5)}
-    #mtal-fab:hover{border-color:#b5934f}
+    #mtal-fab,#mtal-fab-mk{box-sizing:border-box;height:44px;display:inline-flex;align-items:center;gap:6px;background:linear-gradient(180deg,#1b1f31,#12141f);color:#f2ead0;border:1px solid #3a4060;border-radius:12px;padding:0 14px;font:bold 13px Inter,sans-serif;cursor:pointer;box-shadow:0 10px 28px rgba(0,0,0,.55)}
+    #mtal-fab:hover,#mtal-fab-mk:hover{border-color:#8b93b8}
+    #mtal-fab-mk{width:44px;padding:0;justify-content:center;font-size:17px}
     #mtal-toast-slot{display:flex;flex-direction:column;gap:6px;pointer-events:none}
     #mtal-toast-slot .mtal-toast{pointer-events:auto}
     #mtal-badge{background:#12141f;color:#f0d78c;border:1px solid #4a4f66;border-radius:6px;padding:4px 8px;margin-left:4px;font-size:11px;display:inline-flex;align-items:center;justify-content:center;line-height:1}
@@ -5383,6 +5392,13 @@
           id="mtal-badge"
           hidden
         ></span>
+      </button>
+
+      <button
+        id="mtal-fab-mk"
+        title="Abrir o Mercado"
+      >
+        🏪
       </button>
 
       <div id="mtal-toast-slot"></div>
@@ -8378,6 +8394,7 @@
   }
 
   $('mtal-mkopen').addEventListener('click', mkOpen);
+  $('mtal-fab-mk').addEventListener('click', mkOpen);
   $('mk-close').addEventListener('click', mkClose);
   $('mk-refresh').addEventListener('click', () => {
     if (mk.mode === 'buy') return mkLoad(true);
@@ -11577,7 +11594,7 @@
 
     /* ---------- estilos ---------- */
     const CSS = `
-      #pdk-root{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);z-index:2147483640;font:12px/1.35 Inter,sans-serif;color:#e8e3d0}
+      #pdk-root{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:2147483640;font:12px/1.35 Inter,sans-serif;color:#e8e3d0}
       #pdk-root .pdk-card{position:relative;display:flex;flex-direction:column;align-items:center;gap:4px;width:180px;box-sizing:border-box;padding:10px 12px 12px;background:linear-gradient(180deg,#1b1f31,#12141f);border:1px solid #3a4060;border-radius:14px;box-shadow:0 10px 28px rgba(0,0,0,.55);cursor:pointer;text-align:center}
       #pdk-root .pdk-card:hover{border-color:#8b93b8}
       #pdk-root .pdk-card.pdk-q{border-color:#c9a44a;animation:dkPulse 2.2s ease-in-out infinite}
@@ -12351,6 +12368,190 @@
     };
   })();
 
+  /* ---------- SUPRIMENTOS (à direita do card do Daily Kill): pokébolas, potions e revives ---------- */
+  (() => {
+    const st = document.createElement('style');
+
+    st.textContent = `
+      #hl-sup{position:fixed;bottom:16px;z-index:2147483640;display:none;align-items:center;gap:10px;box-sizing:border-box;min-height:44px;padding:8px 12px;
+        background:linear-gradient(180deg,#1b1f31,#12141f);border:1px solid #3a4060;border-radius:14px;box-shadow:0 10px 28px rgba(0,0,0,.55);
+        font:12px/1.2 Inter,sans-serif;color:#f2ead0;white-space:nowrap}
+      #hl-sup.on{display:flex}
+      #hl-sup .g{display:flex;align-items:center;gap:6px}
+      #hl-sup .sep{width:1px;align-self:stretch;margin:2px 0;background:#2c3148}
+      #hl-sup .c{display:flex;flex-direction:column;align-items:center;gap:1px;min-width:34px}
+      #hl-sup .c img{width:24px;height:24px;object-fit:contain;image-rendering:pixelated}
+      #hl-sup .c img.idle{width:18px;height:18px;margin:3px 0}
+      #hl-sup .c b{font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}
+      #hl-sup .c.zero b{color:#ef6a6a}
+      #hl-sup .c.low b{color:#f0c14b}
+      #hl-sup .dim{color:#7c829c;font-size:11px}
+    `;
+    document.head.appendChild(st);
+
+    const box = document.createElement('div');
+
+    box.id = 'hl-sup';
+
+    const S = Object.assign({ balls: [], heal: [], revive: [], ok: false }, store.get('supCache', {}) || {});
+
+    const chip = (x) => {
+      const n = x.n || 0;
+      const cls = n <= 0 ? ' zero' : n < 50 ? ' low' : '';
+      const idle = /idle/i.test(x.name + ' ' + x.icon) ? ' class="idle"' : '';
+
+      return `<span class="c${cls}" title="${esc(x.name)}: ${fmt(n)}">${x.icon ? `<img${idle} src="${esc(x.icon)}" onerror="this.remove()">` : ''}<b>${fmt(n)}</b></span>`;
+    };
+
+    function paint() {
+      if (!S.ok) {
+        box.innerHTML = '<span class="dim">Carregando suprimentos…</span>';
+
+        return;
+      }
+
+      const groups = [S.balls, S.heal.filter((x) => x.n > 0), S.revive].filter((g) => g.length);
+
+      box.innerHTML = groups.map((g) => `<span class="g">${g.map(chip).join('')}</span>`).join('<span class="sep"></span>') || '<span class="dim">Sem suprimentos</span>';
+    }
+
+    async function load() {
+      try {
+        const [shop, balls, depot] = await Promise.all([
+          gameGet('/api/game/shop').catch(() => null),
+          gameGet('/api/game/balls').catch(() => null),
+          gameGet('/api/game/depot').catch(() => null)
+        ]);
+        const counts = (balls && balls.counts) || wsSt.ballCounts || {};
+        const inv = (depot && depot.inventory) || [];
+        const qty = (id) => {
+          const it = inv.find((y) => String(y.id ?? y.itemId) === String(id));
+
+          return it ? +it.quantity || 0 : 0;
+        };
+        const icon = (x) => iconUrl(x.iconUrl || x.icon || '');
+        const shopBalls = (shop && Array.isArray(shop.balls) ? shop.balls : []).map((b) => ({ id: b.id, name: b.name, icon: icon(b), n: +(counts[b.id] ?? counts[String(b.id)] ?? 0) }));
+        const known = new Set(shopBalls.map((b) => String(b.id)));
+
+        // bolas que não são vendidas na loja (ex.: Idle Ball) mas aparecem nas contagens
+        Object.keys(counts).forEach((id) => {
+          if (known.has(String(id)) || !(+counts[id] > 0)) return;
+
+          const it = inv.find((y) => String(y.id ?? y.itemId) === String(id));
+
+          shopBalls.push({ id, name: (it && it.name) || 'Idle Ball', icon: it && it.icon ? iconUrl(it.icon) : '/assets/markitems/idleball.png', n: +counts[id] });
+        });
+
+        const items = shop && Array.isArray(shop.items) ? shop.items : [];
+        const isRev = (x) => /revive/i.test(x.category + ' ' + x.name);
+        const isHeal = (x) => !isRev(x) && (/heal/i.test(x.category || '') || /potion/i.test(x.name || ''));
+
+        S.balls = shopBalls;
+        S.heal = items.filter(isHeal).map((x) => ({ id: x.id, name: x.name, icon: icon(x), n: qty(x.id) }));
+        S.revive = items.filter(isRev).map((x) => ({ id: x.id, name: x.name, icon: icon(x) || '/assets/markitems/revive.png', n: qty(x.id) }));
+
+        if (!S.revive.length) {
+          const r = inv.find((y) => /revive/i.test(y.name || ''));
+
+          S.revive = [{ name: 'Revive', icon: r && r.icon ? iconUrl(r.icon) : '/assets/markitems/revive.png', n: r ? +r.quantity || 0 : 0 }];
+        }
+
+        S.ok = true;
+        store.set('supCache', { balls: S.balls, heal: S.heal, revive: S.revive, ok: true });
+      } catch (e) {}
+
+      paint();
+    }
+
+    // Tempo real: o jogo manda as contagens pelo WebSocket (bolas em "counts", itens com itemId/quantity).
+    const setN = (list, id, n) => {
+      const x = list.find((y) => String(y.id) === String(id));
+
+      if (x && x.n !== n) {
+        x.n = n;
+
+        return true;
+      }
+
+      return false;
+    };
+
+    wsSt.onMsg = (v) => {
+      if (v.length > 400000 || !/"(counts|quantity|qty)"/.test(v)) return;
+
+      const j = JSON.parse(v);
+      let ch = false;
+      const counts = j && (j.counts || (j.balls && !Array.isArray(j.balls) && j.balls));
+
+      if (counts && typeof counts === 'object') {
+        Object.keys(counts).forEach((id) => {
+          if (Number.isFinite(+counts[id])) ch = setN(S.balls, id, +counts[id]) || ch;
+        });
+      }
+
+      const lists = [j.inventory, j.items, j.list, j.bag, j.consumables].filter(Array.isArray);
+
+      lists.forEach((arr) =>
+        arr.forEach((it) => {
+          if (!it || typeof it !== 'object') return;
+
+          const id = it.itemId ?? it.id;
+          const n = Number(it.quantity ?? it.qty ?? it.count);
+
+          if (id == null || !Number.isFinite(n)) return;
+
+          ch = setN(S.heal, id, n) || ch;
+          ch = setN(S.revive, id, n) || ch;
+        })
+      );
+
+      const one = j.item && typeof j.item === 'object' ? j.item : j.itemId != null ? j : null;
+
+      if (one) {
+        const n = Number(one.quantity ?? one.qty ?? one.left ?? one.remaining);
+
+        if (Number.isFinite(n)) {
+          const id = one.itemId ?? one.id;
+
+          ch = setN(S.heal, id, n) || setN(S.revive, id, n) || setN(S.balls, id, n) || ch;
+        }
+      }
+
+      if (ch) {
+        paint();
+        store.set('supCache', { balls: S.balls, heal: S.heal, revive: S.revive, ok: true });
+      }
+    };
+
+    function place() {
+      if (!box.isConnected && document.body) {
+        document.body.appendChild(box);
+        paint();
+      }
+
+      const card = document.querySelector('#pdk-root .pdk-card');
+      const r = card && card.getBoundingClientRect();
+
+      if (!r || !r.width) return box.classList.remove('on');
+
+      box.classList.add('on');
+      box.style.left = Math.round(r.right + 12) + 'px';
+      box.style.bottom = Math.round(innerHeight - r.bottom) + 'px';
+      box.style.minHeight = Math.round(r.height) + 'px';
+    }
+
+    // carrega assim que a sessão existir (sem esperar tempo fixo); o cache já aparece na hora
+    const iv = setInterval(() => {
+      if (!getAuths().length) return;
+
+      clearInterval(iv);
+      load();
+    }, 150);
+
+    setInterval(load, 20000);
+    setInterval(place, 250);
+  })();
+
   PW.MarketAlerts = {
     dk() {
       gameGet('/api/game/daily-kill').then((d) => console.log(JSON.stringify(d, null, 1)));
@@ -12981,9 +13182,9 @@
       .hl-tp:hover{background:color-mix(in srgb,var(--c) 22%,transparent)}
       .hl-tp.on{background:var(--c);color:#fff;text-shadow:0 1px 1px rgba(0,0,0,.35);box-shadow:none}
 
-      .hl-grid{display:grid;grid-template-columns:48px minmax(0,1fr) 56px 72px 88px 58px 56px 58px;align-items:center;column-gap:10px}
+      .hl-grid{display:grid;grid-template-columns:48px minmax(0,1fr) 56px 72px 88px 58px 56px 72px;align-items:center;column-gap:10px}
       .hl-head{padding:0 14px;height:30px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:#0a1117;
-        color:var(--dim);font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;overflow-y:hidden;scrollbar-gutter:stable}
+        color:var(--dim);font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;overflow-y:hidden;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:#253a4b transparent}
       .hl-head [data-sort]{cursor:pointer;text-align:right}
       .hl-head [data-sort]:hover{color:var(--tx)}
       .hl-head [data-sort].on{color:var(--gold)}
@@ -13017,7 +13218,7 @@
       .hl-eff.good{color:#08210f;background:var(--ok)}
       .hl-eff.bad{color:#fff;background:var(--bad)}
       .hl-acts{display:flex;justify-content:flex-end;gap:2px}
-      .hl-ib{all:unset;cursor:pointer;width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:14px}
+      .hl-ib{all:unset;cursor:pointer;width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:18px}
       .hl-ib:hover{background:var(--row2);color:var(--tx)}
       .hl-ib.fav.on{color:var(--gold)}
       .hl-ib.more.on{color:var(--tx);transform:rotate(180deg)}
@@ -13605,15 +13806,15 @@
       const CSS = `
         .hlm-fab {
           position: fixed; right: 16px; bottom: 16px;
-          width: 46px; height: 46px; border-radius: 14px; padding: 0;
+          width: 44px; height: 44px; border-radius: 12px; padding: 0; box-sizing: border-box;
           display: flex; align-items: center; justify-content: center;
-          background: rgba(12, 20, 27, .92); border: 1px solid #2a3a4a; color: #f0c661;
-          z-index: 99998; cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,.45);
-          backdrop-filter: blur(4px); transition: border-color .15s, background .15s, transform .15s;
+          background: linear-gradient(180deg, #1b1f31, #12141f); border: 1px solid #3a4060; color: #f2ead0;
+          z-index: 99998; cursor: pointer; box-shadow: 0 10px 28px rgba(0,0,0,.55);
+          transition: border-color .15s;
         }
-        .hlm-fab:hover { border-color: #f0c661; background: rgba(23, 38, 51, .95); transform: translateY(-1px); }
+        .hlm-fab:hover { border-color: #8b93b8; }
         .hlm-fab svg { width: 20px; height: 20px; display: block; }
-        .market-cta { margin-right: 62px !important; }
+        .market-cta { margin-right: 62px !important; bottom: 16px !important; }
         .hlm-overlay {
           position: fixed; inset: 0; background: rgba(0,0,0,.6);
           z-index: 99999; display: none; align-items: flex-end;
@@ -13846,23 +14047,6 @@
         killOld();
         setInterval(killOld, 1000);
 
-        // Menu ao lado do "Ir ao Mercado", centralizado na altura dele.
-        const alignFab = () => {
-          const mk = document.querySelector('.market-cta');
-          const r = mk && mk.getBoundingClientRect();
-
-          if (r && r.height) {
-            fab.style.top = Math.round(r.top + (r.height - fab.offsetHeight) / 2) + 'px';
-            fab.style.bottom = 'auto';
-          } else {
-            fab.style.top = '';
-            fab.style.bottom = '';
-          }
-        };
-
-        alignFab();
-        setInterval(alignFab, 500);
-        window.addEventListener('resize', alignFab);
         return true;
       }
 
@@ -13877,7 +14061,7 @@
       // Chat acima do botão "Alertas" do LiveSearch.
       const st = document.createElement('style');
 
-      st.textContent = '.chat-box,.chat-fab{bottom:62px!important}';
+      st.textContent = '.chat-box,.chat-fab{left:16px!important;bottom:68px!important}';
       (document.head || document.documentElement).appendChild(st);
 
       // Começa minimizado (uma vez por carregamento; depois respeita o que você fizer).
@@ -13911,9 +14095,9 @@
       const st = document.createElement('style');
 
       st.textContent = `
-        .ah-panel .ah-head{all:unset;cursor:pointer;touch-action:none;user-select:none;-webkit-user-drag:none;display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:15px;
-          background:rgba(12,20,27,.92);border:1px solid #2a3a4a;color:#e3eaf1;font:600 12px/1 Inter,Barlow,system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.4)}
-        .ah-panel .ah-head:hover{border-color:#3d5a70}
+        .ah-panel .ah-head{all:unset;box-sizing:border-box;cursor:pointer;user-select:none;-webkit-user-drag:none;position:relative;z-index:2147483641;display:inline-flex;align-items:center;gap:6px;height:44px;padding:0 14px;border-radius:12px;
+          background:linear-gradient(180deg,#1b1f31,#12141f);border:1px solid #3a4060;color:#f2ead0;font:700 13px/1 Inter,Barlow,system-ui,sans-serif;box-shadow:0 10px 28px rgba(0,0,0,.55)}
+        .ah-panel .ah-head:hover{border-color:#8b93b8}
 
         .ah-overlay{background:rgba(0,0,0,.3)!important;backdrop-filter:none!important}
         .ah-modal{--bg:#0c141b;--panel:#101a23;--row:#121e28;--row2:#172633;--line:#1b2b38;--tx:#e3eaf1;--dim:#768a9c;--on:#57d38c;
@@ -13976,117 +14160,36 @@
       `;
       (document.head || document.documentElement).appendChild(st);
 
-      // Botão do Auto-Helper arrastável (posição salva). Clique curto continua abrindo.
+      // Botão do Auto-Helper sempre à esquerda do card do Daily Kill, alinhado pela base.
       // Move só o botão com "translate", sem tirar ele do lugar no layout do jogo.
-      const KEY = 'ahOff';
-      let moved = false;
-
-      const getOff = () => {
-        try {
-          return ls.get(KEY, null) || { x: 0, y: 0 };
-        } catch (e) {
-          return { x: 0, y: 0 };
-        }
-      };
-
-      const setOff = (head, o) => {
-        head.style.translate = o.x + 'px ' + o.y + 'px';
-      };
-
-      document.addEventListener(
-        'pointerdown',
-        (e) => {
-          const head = e.button === 0 && e.target.closest && e.target.closest('.ah-head');
-
-          if (!head || !head.closest('.ah-panel')) return;
-
-          const tr = (head.style.translate || '').match(/-?[\d.]+/g);
-          const start = tr ? { x: +tr[0] || 0, y: +tr[1] || 0 } : getOff();
-          const r = head.getBoundingClientRect();
-          const base = { l: r.left - start.x, t: r.top - start.y };
-          const sx = e.clientX;
-          const sy = e.clientY;
-          let cur = start;
-
-          moved = false;
-
-          const mv = (ev) => {
-            if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) return;
-
-            moved = true;
-            head.style.cursor = 'grabbing';
-
-            const x = Math.max(-base.l, Math.min(innerWidth - r.width - base.l, start.x + ev.clientX - sx));
-            const y = Math.max(-base.t, Math.min(innerHeight - r.height - base.t, start.y + ev.clientY - sy));
-
-            cur = { x: Math.round(x), y: Math.round(y) };
-            setOff(head, cur);
-
-            try {
-              ls.set(KEY, cur);
-            } catch (err) {}
-          };
-          const up = () => {
-            removeEventListener('pointermove', mv, true);
-            removeEventListener('pointerup', up, true);
-            removeEventListener('pointercancel', up, true);
-            head.style.cursor = '';
-          };
-
-          addEventListener('pointermove', mv, true);
-          addEventListener('pointerup', up, true);
-          addEventListener('pointercancel', up, true);
-        },
-        true
-      );
-
-      // Impede o "arrastar nativo" do navegador (imagem/texto), que cancelava o arraste.
-      document.addEventListener(
-        'dragstart',
-        (e) => {
-          if (e.target.closest && e.target.closest('.ah-panel .ah-head')) e.preventDefault();
-        },
-        true
-      );
-
-      // Depois de arrastar, o clique que sobra não abre a janela.
-      document.addEventListener(
-        'click',
-        (e) => {
-          if (moved && e.target.closest && e.target.closest('.ah-panel .ah-head')) {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            moved = false;
-          }
-        },
-        true
-      );
-
-      setInterval(() => {
+      const place = () => {
         const head = document.querySelector('.ah-panel .ah-head');
 
         if (!head) return;
 
-        const saved = ls.get(KEY, null);
-
-        if (saved) {
-          if (!head.style.translate) setOff(head, saved);
-
-          return;
-        }
-
-        // Sem posição salva: se estiver embaixo do card do Daily Kill, empurra para a esquerda dele.
-        const dkEl = document.querySelector('#mtal-dk .dk-card, #pdk-root .pdk-card');
         const tr = (head.style.translate || '').match(/-?[\d.]+/g);
         const cur = { x: tr ? +tr[0] || 0 : 0, y: tr ? +tr[1] || 0 : 0 };
         const r = head.getBoundingClientRect();
         const nat = { l: r.left - cur.x, r: r.right - cur.x, t: r.top - cur.y, b: r.bottom - cur.y };
+        const dkEl = document.querySelector('#pdk-root .pdk-card, #mtal-dk .dk-card');
         const d = dkEl && dkEl.getBoundingClientRect();
-        const hit = d && d.width && nat.l < d.right && nat.r > d.left && nat.t < d.bottom && nat.b > d.top;
-        const want = hit ? { x: Math.round(d.left - 12 - nat.r), y: 0 } : { x: 0, y: 0 };
+        let want = { x: 0, y: 0 };
 
-        if (want.x !== cur.x || want.y !== cur.y) setOff(head, want);
-      }, 1000);
+        if (d && d.width) {
+          want = { x: Math.round(d.left - 12 - nat.r), y: Math.round(d.bottom - nat.b) };
+        } else {
+          want = { x: 0, y: Math.round(innerHeight - 16 - nat.b) };
+        }
+
+        // nunca fora da tela
+        want.x = Math.max(-nat.l + 8, Math.min(innerWidth - 8 - nat.r, want.x));
+        want.y = Math.max(-nat.t + 8, Math.min(innerHeight - 8 - nat.b, want.y));
+
+        if (want.x !== cur.x || want.y !== cur.y) head.style.translate = want.x + 'px ' + want.y + 'px';
+      };
+
+      setInterval(place, 500);
+      addEventListener('resize', place);
     })();
 
     /* ---------- hunt analyzer (só visual) ---------- */
@@ -14182,7 +14285,7 @@
         .ha-window.ha-window .ha-note{margin:0!important;padding:0 2px!important;text-align:left!important;font-size:10px!important;color:#5c7082!important}
 
         /* ----- modo barra (topo da tela) ----- */
-        .ha-window.ha-window.ha-bar{inset:6px auto auto 50%!important;transform:translateX(-50%)!important;width:auto!important;max-width:96vw!important;height:34px!important;
+        .ha-window.ha-window.ha-bar{z-index:2147483001!important;inset:6px auto auto 50%!important;transform:translateX(-50%)!important;width:auto!important;max-width:96vw!important;height:34px!important;
           display:flex!important;flex-direction:row!important;align-items:stretch!important;overflow:visible!important;border-radius:10px!important}
         .ha-window.ha-window.ha-bar .ha-head{order:2;flex:none!important;width:auto!important;min-width:0!important;padding:0 4px!important;border:none!important;border-left:1px solid var(--line)!important;cursor:default}
         .ha-window.ha-window.ha-bar .ha-title{display:none!important}
@@ -14206,12 +14309,10 @@
         .ha-window.ha-window.ha-bar .ha-drops-head::before{content:'🎒 Drops'!important;display:inline!important;font-size:11px;font-weight:700;text-transform:none;letter-spacing:0;color:var(--tx)}
         .ha-window.ha-window.ha-bar .ha-drops{display:none!important;position:absolute!important;top:100%!important;right:0!important;left:auto!important;z-index:50!important;margin:4px 0 0!important;width:300px;max-height:320px;
           background:var(--bg)!important;border:1px solid #223444!important;box-shadow:0 14px 40px rgba(0,0,0,.55)!important}
-        .ha-window.ha-window.ha-bar .ha-drops-head:hover + .ha-drops,.ha-window.ha-window.ha-bar .ha-drops:hover{display:flex!important}
         /* "Nenhum drop ainda": vira a mesma caixinha flutuante */
         .ha-window.ha-window.ha-bar .ha-drops-head + :not(.ha-drops){display:none!important;position:absolute!important;top:100%!important;right:0!important;left:auto!important;z-index:50!important;
           margin:4px 0 0!important;padding:10px 12px!important;width:260px;white-space:normal;background:var(--bg)!important;border:1px solid #223444!important;border-radius:8px!important;
           box-shadow:0 14px 40px rgba(0,0,0,.55)!important;color:var(--dim)!important;font-size:11.5px!important;text-align:left!important}
-        .ha-window.ha-window.ha-bar .ha-drops-head:hover + :not(.ha-drops){display:block!important}
         .ha-window.ha-window.ha-bar .ha-drops::before{content:'';position:absolute;left:0;right:0;top:-8px;height:8px}
         .ha-window.ha-window.ha-bar .ha-drops{overflow-y:auto!important}
       `;
@@ -14433,6 +14534,19 @@
           height:26px;padding:0 4px 0 12px;background:var(--bg);color:var(--tx);border:1px solid #223444;border-radius:9px;box-shadow:0 10px 30px rgba(0,0,0,.45);
           font:12px/1 Inter,Barlow,system-ui,sans-serif;white-space:nowrap;font-variant-numeric:tabular-nums}
         #hl-cbar.on{display:flex}
+        /* caixinha de Drops da barra: desenhada fora da janela do jogo, acima de tudo (inclusive da barra de capturas) */
+        #hl-dpop{position:fixed;z-index:2147483600;display:none;flex-direction:column;width:300px;max-height:320px;overflow-y:auto;
+          background:#0c141b;border:1px solid #223444;border-radius:8px;box-shadow:0 14px 40px rgba(0,0,0,.55);color:#e3eaf1;
+          font:12px/1.3 Inter,Barlow,system-ui,sans-serif;scrollbar-width:thin;scrollbar-color:#253a4b transparent}
+        #hl-dpop.on{display:flex}
+        #hl-dpop .ha-drop{display:grid;grid-template-columns:20px minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid #1b2b38}
+        #hl-dpop .ha-drop:last-child{border-bottom:none}
+        #hl-dpop .ha-drop-ico{width:20px;height:20px;display:flex;align-items:center;justify-content:center}
+        #hl-dpop .ha-drop-ico img{max-width:20px;max-height:20px;image-rendering:pixelated}
+        #hl-dpop .ha-drop-name{font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        #hl-dpop .ha-drop-qty{font-size:11px;color:#768a9c;font-variant-numeric:tabular-nums}
+        #hl-dpop .ha-drop-gold{min-width:52px;text-align:right;font-size:11.5px;font-weight:700;color:#57d38c;font-variant-numeric:tabular-nums}
+        #hl-dpop .dp-empty{padding:10px 12px;color:#768a9c;font-size:11.5px}
         #hl-cbar .i{display:flex;align-items:center;gap:5px;font-weight:700}
         #hl-cbar .i small{font-size:11px;font-weight:600;color:var(--dim)}
         #hl-cbar .sep{width:1px;height:16px;background:var(--line)}
@@ -14553,43 +14667,16 @@
           <button type="button" class="clr${armed ? ' arm' : ''}" title="Limpar histórico de capturas">${armed ? 'Confirmar?' : '🗑'}</button>`;
       }
 
-      // Limpar histórico: usa o próprio botão "Limpar histórico" do Log de Capturas do jogo.
-      const findClear = () => [...document.querySelectorAll('.clog-window button')].find((b) => /limpar hist/i.test(b.textContent));
-
+      // Limpar histórico: mesmo comando que o botão "Limpar histórico" do jogo usa.
       async function clearLog() {
-        let btn = findClear();
-        const opened = !btn;
-
-        if (!btn) {
-          const open = document.querySelector('.ha-window .ha-clog-btn');
-
-          if (open) open.click();
-
-          for (let i = 0; i < 30 && !btn; i++) {
-            await sleep(100);
-            btn = findClear();
-          }
+        try {
+          await gamePost('/api/game/capture-log/clear', {});
+          info = null;
+          paint();
+          setTimeout(load, 800);
+        } catch (e) {
+          toast('Não consegui limpar o histórico: ' + ((e && e.message) || e));
         }
-
-        if (!btn) {
-          toast('Não achei o botão "Limpar histórico" do jogo.');
-
-          return;
-        }
-
-        btn.click();
-
-        // Se a janela do Log foi aberta só para limpar, fecha de novo.
-        if (opened) {
-          await sleep(600);
-
-          const x = document.querySelector('.clog-window .clog-x');
-
-          if (x) x.click();
-        }
-
-        setTimeout(load, 1500);
-        setTimeout(load, 5000);
       }
 
       bar.addEventListener('click', (e) => {
@@ -14612,6 +14699,56 @@
         paint();
         clearLog();
       });
+
+      // Drops da barra: cópia do conteúdo do jogo num elemento próprio, por cima de tudo.
+      const pop = document.createElement('div');
+      let popT = 0;
+
+      pop.id = 'hl-dpop';
+
+      const fillPop = () => {
+        const w = document.querySelector('.ha-window.ha-bar');
+        const head = w && w.querySelector('.ha-drops-head');
+
+        if (!head) return pop.classList.remove('on');
+
+        const drops = w.querySelector('.ha-drops');
+        const empty = !drops && head.nextElementSibling;
+
+        pop.innerHTML = drops ? drops.innerHTML : `<div class="dp-empty">${esc((empty && empty.textContent.trim()) || 'Nenhum drop ainda.')}</div>`;
+
+        const r = head.getBoundingClientRect();
+
+        pop.style.top = Math.round(r.bottom + 4) + 'px';
+        pop.style.left = Math.round(Math.max(8, Math.min(innerWidth - 308, r.right - 300))) + 'px';
+      };
+
+      const showPop = () => {
+        clearTimeout(popT);
+
+        if (!pop.isConnected) document.body.appendChild(pop);
+
+        fillPop();
+        pop.classList.add('on');
+      };
+
+      const hidePop = () => {
+        clearTimeout(popT);
+        popT = setTimeout(() => pop.classList.remove('on'), 150);
+      };
+
+      document.addEventListener('mouseover', (e) => {
+        const t = e.target;
+
+        if (!t.closest) return;
+
+        if (t.closest('.ha-window.ha-bar .ha-drops-head') || t.closest('#hl-dpop')) showPop();
+        else if (pop.classList.contains('on')) hidePop();
+      });
+
+      setInterval(() => {
+        if (pop.classList.contains('on')) fillPop();
+      }, 1000);
 
       setInterval(() => {
         const ha = document.querySelector('.ha-window.ha-bar');
