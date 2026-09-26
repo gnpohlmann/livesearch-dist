@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.4.83
+// @version      0.4.89
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -21,7 +21,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.83';
+  const VERSION = '0.4.89';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -235,7 +235,7 @@
   }
 
   const capSeen = new WeakSet();
-  const wsSt = { sock: null, pokes: null, fam: null, waits: [], seen: new WeakSet(), wseen: new WeakSet(), sends: [] };
+  const wsSt = { sock: null, pokes: null, fam: null, waits: [], seen: new WeakSet(), wseen: new WeakSet(), kseen: new WeakSet(), sends: [] };
 
   function wsIn(ev, v) {
     try {
@@ -245,6 +245,13 @@
     } catch (e) {}
 
     if (typeof v !== 'string' || wsSt.seen.has(ev)) return;
+
+    try {
+      if (v.startsWith('{"type":"field-kill"') && !wsSt.kseen.has(ev)) {
+        wsSt.kseen.add(ev);
+        dkKill(JSON.parse(v));
+      }
+    } catch (e) {}
 
     try {
       if (v.length < 300000 && /"(gold|dollars?|money|diamonds?)"\s*:/i.test(v) && !/^\{"type":"(field|chat)"/.test(v) && !wsSt.wseen.has(ev)) {
@@ -595,6 +602,36 @@
         const u0 = String((input && input.url) || input || '');
 
         const m0 = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+
+        if (m0 === 'POST' && u0.includes('/api/game/daily-kill')) {
+          const b0 = typeof (init && init.body) === 'string' ? init.body : '';
+          const kind = /claim|resgat|collect|reward/i.test(u0 + b0) ? 'dkClaim' : /reroll/i.test(u0 + b0) ? 'dkReroll' : 'dkChoose';
+
+          res
+            .then((r) => {
+              if (!r.ok) return;
+
+              store.set(kind, { url: u0.replace(location.origin, ''), body: b0 });
+              log('daily kill: ação aprendida', kind, u0, b0);
+              setTimeout(() => {
+                try {
+                  dkLoad();
+                } catch (e) {}
+              }, 800);
+            })
+            .catch(() => {});
+        }
+
+        if (m0 === 'GET' && u0.includes('/api/game/daily-kill')) {
+          res
+            .then((r) => r.clone().json())
+            .then((d) => {
+              try {
+                dkSet(d);
+              } catch (e) {}
+            })
+            .catch(() => {});
+        }
 
         if (m0 === 'POST' && /\/api\/game\/(held-machine|pokemaniac-trader)/.test(u0)) {
           const b0 = typeof (init && init.body) === 'string' ? init.body : '';
@@ -4132,6 +4169,87 @@
     #mtal-panel[style*="display: block"]{display:flex!important;flex-direction:column}
     #mtal-panel-head{flex:none;max-height:calc(72vh - 30px);overflow-y:auto;scrollbar-width:thin;position:sticky;top:0;z-index:2;background:#12141f;padding:10px 10px 0 10px;box-shadow:0 6px 10px -6px rgba(0,0,0,.65)}
     #mtal-panel-head::-webkit-scrollbar{width:3px}
+    #mtal-dk{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);z-index:2147483640;font:12px/1.35 Inter,sans-serif;color:#e8e3d0}
+    #mtal-dk .dk-card{position:relative;display:flex;flex-direction:column;align-items:center;gap:4px;width:180px;box-sizing:border-box;padding:10px 12px 12px;background:linear-gradient(180deg,#1b1f31,#12141f);border:1px solid #3a4060;border-radius:14px;box-shadow:0 10px 28px rgba(0,0,0,.55);cursor:pointer;text-align:center}
+    #mtal-dk .dk-card:hover{border-color:#8b93b8}
+    #mtal-dk .dk-card.dk-q{border-color:#c9a44a;animation:dkPulse 2.2s ease-in-out infinite}
+    #mtal-dk .dk-card.dk-full{border-color:#61f6a4}
+    @keyframes dkPulse{0%,100%{box-shadow:0 10px 28px rgba(0,0,0,.55)}50%{box-shadow:0 0 0 5px rgba(240,215,140,.16),0 10px 28px rgba(0,0,0,.55)}}
+    #mtal-dk .dk-hd{display:flex;align-items:center;justify-content:space-between;width:100%;min-height:18px}
+    #mtal-dk .dk-hd-r{display:flex;align-items:center;gap:4px}
+    #mtal-dk .dk-star{font-style:normal;color:#f0c14b}
+    #mtal-dk .dk-mbtn{margin-top:2px;padding:3px 10px;background:transparent;border:none;border-radius:6px;color:#7c829c;font:inherit;font-size:10px;cursor:pointer}
+    #mtal-dk .dk-mbtn:hover{color:#e8eaf2;background:#1f2436}
+    #mtal-dk .dk-min{width:20px;height:18px;padding:0;background:transparent;border:1px solid transparent;border-radius:5px;color:#7c829c;font-size:11px;cursor:pointer}
+    #mtal-dk .dk-min:hover{border-color:#4a4f66;color:#fff}
+    #mtal-dk .dk-tier{padding:1px 8px;border:1px solid #6b5a1f;border-radius:999px;background:#2a2410;color:#f0c14b;font-size:10px;font-weight:800;letter-spacing:.03em;white-space:nowrap}
+    #mtal-dk .dk-sp{display:grid;place-items:center;width:80%;aspect-ratio:1/1.12;margin:2px 0 4px;border-radius:14px;background:radial-gradient(circle at 50% 40%,#232842,#0d0f18);border:1px solid #2c3148;overflow:hidden}
+    #mtal-dk .dk-sp img{width:78%;height:auto;max-height:90%;object-fit:contain;image-rendering:pixelated}
+    #mtal-dk .dk-qbox{border-color:#6b5a1f;background:radial-gradient(circle at 50% 40%,#3a3016,#12141f)}
+    #mtal-dk .dk-qbox b{font-size:78px;line-height:1;color:#f0c14b;text-shadow:0 0 18px rgba(240,193,75,.45)}
+    #mtal-dk .dk-num{font-size:9.5px;color:#7c829c}
+    #mtal-dk .dk-name{font-size:12px;color:#f2ead0}
+    #mtal-dk .dk-q .dk-name{font-size:11.5px}
+    #mtal-dk .dk-hint{font-size:9.5px;color:#9aa0b8}
+    #mtal-dk .dk-types{display:flex;gap:4px;justify-content:center}
+    #mtal-dk .dk-xp{font-size:10.5px;font-weight:800;color:#f0c14b}
+    #mtal-dk .dk-cnt{font-size:11px;color:#9aa0b8}
+    #mtal-dk .dk-cnt em{font-style:normal;font-size:17px;font-weight:800;color:#55d6f0}
+    #mtal-dk .dk-bar{width:100%;height:6px;background:#2c3148;border-radius:3px;overflow:hidden}
+    #mtal-dk .dk-bar i{display:block;height:100%;background:linear-gradient(90deg,#55d6f0,#61f6a4);border-radius:3px}
+    #mtal-dk .dk-rws{display:flex;flex-wrap:wrap;justify-content:center;gap:4px}
+    #mtal-dk .dk-rwi{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:999px;background:#1f2436;border:1px solid #2c3148;font-size:10.5px;color:#c7cbe0;white-space:nowrap}
+    #mtal-dk .dk-rwi img{width:16px;height:16px;image-rendering:pixelated}
+    #mtal-dk .dk-rwi b{color:#f2ead0}
+    #mtal-dk .dk-btn{width:100%;margin-top:4px;padding:6px 0;border-radius:8px;background:#232840;border:1px solid #2c3148;color:#9aa0b8;font-size:11px;font-weight:700}
+    #mtal-dk .dk-btn.go{background:#e8eaf2;border-color:#e8eaf2;color:#12141f;cursor:pointer}
+    #mtal-dk .dk-full .dk-btn.go{background:#61f6a4;border-color:#61f6a4;color:#0d1a12}
+    #mtal-dk .dk-btn.done{background:#1d3325;border-color:#2e7d4f;color:#61f6a4}
+    #mtal-dk .dk-card.dk-mini{width:auto;min-width:0;max-width:280px;padding:7px 12px 7px 7px;gap:4px}
+    #mtal-dk .dk-mini .dk-minfo{flex:0 1 auto;min-width:110px}
+    #mtal-dk .dk-mini .dk-bar{width:100%;min-width:130px;height:4px;margin-top:2px}
+    #mtal-dk .dk-rdy{color:#61f6a4}
+    #mtal-dk .dk-mrow{display:flex;align-items:center;gap:10px;width:100%;text-align:left}
+    #mtal-dk .dk-msp{flex:none;display:grid;place-items:center;width:40px;height:40px;border-radius:10px;background:#0d0f18;border:1px solid #2c3148;overflow:hidden}
+    #mtal-dk .dk-msp img{max-width:38px;max-height:38px;image-rendering:pixelated}
+    #mtal-dk .dk-msp b{font-size:24px;color:#f0c14b}
+    #mtal-dk .dk-minfo{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+    #mtal-dk .dk-minfo > b{font-size:12px;color:#f2ead0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #mtal-dk .dk-minfo span{font-size:10.5px;color:#9aa0b8}
+    #mtal-dk .dk-minfo em{font-style:normal;font-weight:800;color:#55d6f0}
+    #mtal-dk .dk-over{border-color:#2e7d4f}
+    #mtal-dk .dk-ok{background:#1d3325;border-color:#2e7d4f;color:#61f6a4;font-size:20px;font-weight:800}
+    #mtal-dk .dk-pick{position:absolute;left:50%;bottom:calc(100% + 10px);transform:translateX(-50%);width:min(760px,94vw);padding:14px;background:#12141f;border:1px solid #c9a44a;border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.65)}
+    #mtal-dk .dk-pick-h{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+    #mtal-dk .dk-pick-h > b{font-size:14px;color:#f2ead0}
+    #mtal-dk .dk-dim{font-size:11px;color:#7c829c}
+    #mtal-dk .dk-timer{color:#55d6f0}
+    #mtal-dk .dk-x{margin-left:auto;width:26px;height:26px;padding:0;background:transparent;border:1px solid transparent;border-radius:6px;color:#9aa0b8;cursor:pointer}
+    #mtal-dk .dk-x:hover{border-color:#4a4f66;color:#fff}
+    #mtal-dk .dk-rw{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:10px;padding:6px 10px;background:#171a28;border:1px solid #2c3148;border-radius:8px}
+    #mtal-dk .dk-rw span{font-size:9.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#7c829c}
+    #mtal-dk .dk-rw em{padding:2px 8px;border-radius:999px;background:#1f2436;font-style:normal;font-size:11px}
+    #mtal-dk .dk-rw em.xp{color:#f0c14b;font-weight:800}
+    #mtal-dk .dk-opts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+    #mtal-dk .dk-opt{position:relative;display:flex;flex-direction:column;align-items:center;gap:4px;padding:12px 10px;background:#1a1e30;border:1px solid #2c3148;border-radius:10px;text-align:center}
+    #mtal-dk .dk-opt.on{border-color:#e8eaf2;background:#1e2336}
+    #mtal-dk .dk-opt.off{opacity:.5}
+    #mtal-dk .dk-star{position:absolute;top:6px;right:8px;color:#f0c14b}
+    #mtal-dk .dk-osp{display:grid;place-items:center;width:72px;height:72px;border-radius:10px;background:#12141f}
+    #mtal-dk .dk-osp img{max-width:68px;max-height:68px;image-rendering:pixelated}
+    #mtal-dk .dk-opt small{color:#7c829c;font-size:10px}
+    #mtal-dk .dk-opt > b{font-size:13px;color:#f2ead0}
+    #mtal-dk .dk-types{display:flex;gap:4px;justify-content:center}
+    #mtal-dk .dk-type{padding:2px 8px;border-radius:999px;font-size:9px;font-weight:800;text-transform:uppercase}
+    #mtal-dk .dk-oxp{color:#f0c14b;font-weight:700;font-size:11px}
+    #mtal-dk .dk-ocnt{font-size:12px;color:#9aa0b8}
+    #mtal-dk .dk-ocnt b{font-size:16px;color:#55d6f0}
+    #mtal-dk .dk-obar{width:100%;height:5px;margin:4px 0 2px;background:#2c3148;border-radius:3px;overflow:hidden}
+    #mtal-dk .dk-obar i{display:block;height:100%;background:linear-gradient(90deg,#55d6f0,#61f6a4);border-radius:3px}
+    #mtal-dk .dk-ostate{font-size:10.5px;color:#7c829c}
+    #mtal-dk .dk-go{width:100%;height:30px;margin-top:4px;background:#e8eaf2;border:1px solid #e8eaf2;border-radius:6px;color:#12141f;font-weight:700;cursor:pointer}
+    #mtal-dk .dk-go:hover{background:#fff}
+    #mtal-dk .dk-foot{margin-top:10px;text-align:center;font-size:10.5px;color:#7c829c}
     #mtal-cpop{position:fixed;z-index:2147483647;display:none;flex-direction:column;align-items:stretch;gap:6px;width:190px;box-sizing:border-box;padding:12px 12px 12px;background:#12141f;color:#e8e3d0;border:1px solid #3a4060;border-radius:10px;box-shadow:0 10px 28px rgba(0,0,0,.6);font:12px/1.35 Inter,sans-serif}
     #mtal-cpop b{padding-right:18px;font-size:13px;color:#f2ead0}
     #mtal-cpop small{font-size:11px;color:#9aa0b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -4378,6 +4496,7 @@
     #mtal-panel .mtal-hit.lsp{grid-template-columns:52px 120px minmax(0,1fr) 36px;gap:10px;min-height:0;padding:10px 12px}
     #mtal-panel .lsp-block{justify-self:center;display:flex;align-items:center;gap:14px}
     #mtal-panel .lsi .lsp-sp .mtal-hit-thumb img{max-width:40px;max-height:40px;image-rendering:pixelated}
+    #mtal-panel .lsi .mtal-hit-name{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.2;word-break:normal;overflow-wrap:anywhere}
     #mtal-panel .lsi-tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
     #mtal-panel .lsi-cat{padding:1px 8px;border-radius:999px;background:#262b3f;color:#c7cbe0;font-size:9.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase}
     #mtal-panel .lsi-npc{padding:1px 8px;border-radius:999px;background:#1d3325;color:#61f6a4;font-size:9.5px;font-weight:700}
@@ -5132,6 +5251,33 @@
     #mtal-mk .npc-rn b{color:#f2ead0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     #mtal-mk .npc-arrow{flex:none;width:36px;height:30px;padding:0;font-size:16px;color:#f0d78c}
     #mtal-mk .npc-subtabs{margin:0 0 10px}
+    #mtal-mk .mki{display:grid;grid-template-columns:48px minmax(120px,200px) minmax(0,1fr) auto;grid-template-areas:"sp id boxes side";align-items:center;gap:14px;padding:10px 12px;background:#1a1e30;border:1px solid #232840;border-radius:10px;white-space:normal;cursor:pointer}
+    #mtal-mk .mkc-row:hover .mki,#mtal-mk .sl-ik:hover .mki,#mtal-mk .hs-pk:hover .mki{border-color:#4a4f66}
+    #mtal-mk .mkc-row.on .mki,#mtal-mk .sl-ik.on .mki,#mtal-mk .hs-pk.on .mki{border-color:#c7cbe0;background:#1e2336}
+    #mtal-mk .mki-sp{width:44px;height:44px;display:grid;place-items:center}
+    #mtal-mk .mki-sp img{max-width:40px;max-height:40px;image-rendering:pixelated}
+    #mtal-mk .mki-id{min-width:0}
+    #mtal-mk .mki-name{font-size:13px;font-weight:700;color:#f2ead0;line-height:1.2;overflow-wrap:anywhere}
+    #mtal-mk .mki-tags{margin-top:4px}
+    #mtal-mk .mki-npc{padding:1px 8px;border-radius:999px;background:#1d3325;color:#61f6a4;font-size:9.5px;font-weight:700}
+    #mtal-mk .mki-sub{margin-top:4px;font-size:10.5px;color:#7c829c}
+    #mtal-mk .mki-boxes{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px}
+    #mtal-mk .mki-box{display:flex;flex-direction:column;min-width:0;padding:6px 10px;background:#161927;border:1px solid #232840;border-radius:8px}
+    #mtal-mk .mki-box span{font-size:9px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#7c829c}
+    #mtal-mk .mki-box b{font-size:12.5px;color:#f2ead0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #mtal-mk .mki-box b.gold{color:#f0d78c}
+    #mtal-mk .mki-box b.dia{color:#55d6f0}
+    #mtal-mk .mki .mkc-side{grid-area:auto;display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+    #mtal-mk .mki-list{display:flex;flex-direction:column;gap:8px}
+    #mtal-mk .mki-sp{grid-area:sp}
+    #mtal-mk .mki-id{grid-area:id}
+    #mtal-mk .mki-boxes{grid-area:boxes}
+    #mtal-mk .mki > .mkc-side{grid-area:side;min-width:90px}
+    @container (max-width: 720px){
+      #mtal-mk .mki{grid-template-columns:44px minmax(0,1fr) auto;grid-template-areas:"sp id side" "boxes boxes boxes";gap:10px 12px}
+      #mtal-mk .mki-boxes{grid-template-columns:repeat(3,minmax(0,1fr))}
+    }
+    #mtal-mk .sl-ik{cursor:pointer}
     #mtal-mk .npc-have{display:block;margin-top:2px;font-size:10.5px;color:#9aa0b8}
     #mtal-mk .npc-have b{color:#61f6a4}
     #mtal-mk .npc-have.zero b{color:#7c829c}
@@ -5842,9 +5988,8 @@
 
       <div class="lsp-id">
         <div class="mtal-hit-name" title="${esc(h.name || '')}">${esc(h.name || '-')}</div>
-        <div class="lsi-tags"><span class="lsi-cat">${esc(catLabel(h.category) || 'Item')}</span>${h.belowNpc ? '<span class="lsi-npc">abaixo do NPC</span>' : ''}</div>
+        ${h.belowNpc ? '<div class="lsi-tags"><span class="lsi-npc">abaixo do NPC</span></div>' : ''}
         ${npc != null ? `<div class="lsi-alert">NPC paga $ ${fmt(npc)}/un</div>` : ''}
-        <div class="lsi-alert" title="Alerta: ${esc(h.alert || '')}">🔔 ${esc(h.alert || '')}</div>
       </div>
 
       <div class="lsp-block lsi-block">
@@ -6544,6 +6689,10 @@
       'click',
       () => {
         panelOpen = false;
+
+        if (pip.win) {
+          pip.win.close();
+        }
 
         $('mtal-panel')
           .style.display =
@@ -7854,6 +8003,43 @@
     return out;
   }
 
+  // card horizontal de item no mercado (mesmo estilo do LiveSearch)
+  function mkItemCard(h, boxes, side) {
+    const r = h.raw || {};
+    const npc = r.npcPrice != null ? r.npcPrice : null;
+
+    return `<div class="mki">
+      <div class="mki-sp mtal-hit-thumb" data-hid="${h.hid}">${thumbHtml(h)}</div>
+      <div class="mki-id">
+        <div class="mki-name">${esc(h.name || '-')}</div>
+        ${h.belowNpc ? '<div class="mki-tags"><span class="mki-npc">abaixo do NPC</span></div>' : ''}
+        ${npc != null ? `<div class="mki-sub">NPC paga $ ${fmt(npc)}/un</div>` : ''}
+      </div>
+      <div class="mki-boxes">${boxes
+        .filter(Boolean)
+        .map(([l, v, c]) => `<div class="mki-box"><span>${l}</span><b class="${c || ''}">${v}</b></div>`)
+        .join('')}</div>
+      ${side || ''}
+    </div>`;
+  }
+
+  const mkCurTxt = (p, cur) => ((cur === 'DIAMONDS' || cur === 'DIAMOND') ? '💎 ' : '$ ') + fmt(p || 0);
+  const mkCurCls = (cur) => (cur === 'DIAMONDS' || cur === 'DIAMOND' ? 'dia' : 'gold');
+
+  function mkItemBuyCard(h) {
+    const qty = h.quantity != null ? h.quantity : 1;
+
+    return mkItemCard(
+      h,
+      [
+        ['Quantidade', fmt(qty) + '×'],
+        ['Preço/un', h.offerOnly ? 'oferta' : mkCurTxt(h.price, h.currency), mkCurCls(h.currency)],
+        ['Total', h.offerOnly ? '-' : mkCurTxt((h.price || 0) * qty, h.currency), mkCurCls(h.currency)]
+      ],
+      `<div class="mkc-side"><div class="mk-acts">${h.buyable ? `<button type="button" class="mk-buy" data-hid="${h.hid}" title="Comprar">Comprar</button>` : ''}</div></div>`
+    );
+  }
+
   function mkPokeCard(h, side) {
     const v = rpInit(h);
     const R = rpCompute(v);
@@ -7955,14 +8141,12 @@
       '<tr>' +
       (poke
         ? `<th colspan="8" class="mkc-bar"><div class="mkc-barin"><span>Ordenar: ${sb('Nível', 'lvl')}${sb('IV', 'iv')}${sb('Raridade', 'q')}${sb('Preço', 'price')}</span><span class="mkc-views"><button type="button" data-view="list" class="${mk.view === 'list' ? 'on' : ''}" title="Lista">☰</button><button type="button" data-view="grid" class="${mk.view === 'grid' ? 'on' : ''}" title="Grade">▦</button></span></div></th>`
-        : mk.cat === 'all'
-          ? th('') + th('Anúncio') + th('Categoria') + th('Qtd', 'qty') + th('Preço', 'price', 'r') + th('')
-          : th('') + th('Item') + th('Qtd', 'qty') + th('Preço/un', 'price', 'r') + th('')) +
+        : `<th colspan="8" class="mkc-bar"><div class="mkc-barin"><span>Ordenar: ${sb('Preço', 'price')}${sb('Quantidade', 'qty')}</span></div></th>`) +
       '</tr>';
 
     const rows = mkVisible();
 
-    $('mk-tbody').parentElement.classList.toggle('mkc-table', poke);
+    $('mk-tbody').parentElement.classList.toggle('mkc-table', true);
 
     $('mk-tbody').innerHTML =
       rows
@@ -7972,6 +8156,14 @@
           const acts = `<td class="mk-acts">
             ${h.buyable ? `<button type="button" class="mk-buy" data-hid="${h.hid}" title="Comprar">🛒</button>` : ''}
           </td>`;
+
+          if (h.kind !== 'pokemon') {
+            return `<tr class="mtal-mkrow mkc-row" data-hid="${h.hid}"><td colspan="8">${mkItemBuyCard(h)}</td></tr>`;
+          }
+
+          if (mk.cat === 'all') {
+            return `<tr class="mtal-mkrow mkc-row" data-hid="${h.hid}"><td colspan="8">${mkPokeCard(h)}</td></tr>`;
+          }
 
           if (mk.cat === 'all') {
             let sub = '';
@@ -8030,7 +8222,11 @@
         .join('')}</div></td></tr>`;
     }
 
-    rows.filter((h) => !(h.kind === 'pokemon' && mk.cat !== 'all' && rpSprite(h, rpCreature(h)))).forEach(ensureSprite);
+    rows.filter((h) => !(h.kind === 'pokemon' && rpSprite(h, rpCreature(h)))).forEach(ensureSprite);
+
+    if (mk.cat === 'all' && !rpCre && rows.some((h) => h.kind === 'pokemon')) {
+      rpLoadCreatures().then((ok) => ok && mk.cat === 'all' && mkRender());
+    }
 
     $('mk-count').textContent =
       rows.length +
@@ -8798,6 +8994,21 @@
               ? 'Carregando…'
               : 'Nenhum item vendável.'
       }</div>`;
+    } else if (list && !poke) {
+      html = `<div class="mki-list">${cards
+        .map((c) => {
+          const key = slKey(c);
+          const h = { hid: ++hitSeq, kind: 'items', name: c.title || c.name, raw: { icon: c.icon, npcPrice: c.npcPrice } };
+
+          pseudo.push(h);
+
+          return `<div class="sl-ik${key === sl.sel ? ' on' : ''}" data-key="${esc(key)}">${mkItemCard(
+            h,
+            [['Você tem', fmt(c.owned) + '×'], c.npcPrice != null ? ['NPC paga', '$ ' + fmt(c.npcPrice), 'gold'] : null, c.npcPrice != null ? ['Total NPC', '$ ' + fmt(c.npcPrice * c.owned), 'gold'] : null],
+            '<div class="mkc-side"><div class="mk-acts"><button type="button">Anunciar</button></div></div>'
+          )}</div>`;
+        })
+        .join('')}</div>`;
     } else if (list) {
       html =
         `<table class="sl-table"><thead><tr>` +
@@ -9003,18 +9214,22 @@
         return;
       }
 
-      html += `<div class="hs-row" data-hi="${all.indexOf(x)}">
-        <div class="mtal-hit-thumb hs-th" data-hid="${h.hid}">${thumbHtml(h)}</div>
-        <div class="hs-main">
-          <div class="hs-name">${esc(x.name || '-')}${h.shiny ? ' ✨' : ''}</div>
-          <div class="hs-sub">${sub}</div>
-        </div>
-        <div class="hs-right">
+      const qtyH = x.amount != null ? x.amount : 1;
+
+      html += `<div class="hs-pk" data-hi="${all.indexOf(x)}">${mkItemCard(
+        h,
+        [
+          ['Quantidade', fmt(qtyH) + '×'],
+          ['Preço', mkCurTxt(x.price || 0, x.currency), mkCurCls(x.currency)]
+        ],
+        `<div class="mkc-side">
           <span class="hs-tag ${x.bought ? 'buy' : 'sell'}">${x.bought ? 'Compra' : 'Venda'}${x.offer ? ' · oferta' : ''}</span>
-          <b class="${x.bought ? 'neg' : 'pos'}">${x.bought ? '−' : '+'}${esc(priceTxt2(x.price || 0, x.currency))}</b>
-          <small>${x.at ? esc(new Date(x.at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })) : ''}</small>
-        </div>
-      </div>`;
+          <div class="mk-price ${x.bought ? 'neg' : 'pos'}">${x.bought ? '−' : '+'}${esc(priceTxt2(x.price || 0, x.currency))}</div>
+          <small class="mk-dim">${x.at ? esc(new Date(x.at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })) : ''}</small>
+        </div>`
+      )}</div>`;
+
+
     });
 
     $('hs-list').innerHTML = html;
@@ -9052,6 +9267,26 @@
               h,
               `<div class="mkc-side">
                 <div class="mk-price">${esc(hitPrice(h))}</div>
+                <div class="mk-acts">
+                  <button type="button" data-act="reprice" data-hid="${h.hid}" title="Alterar preço">✎</button>
+                  <button type="button" data-act="cancel" data-hid="${h.hid}" title="Cancelar anúncio">✕</button>
+                </div>
+              </div>`
+            )}</td></tr>`;
+          }
+
+          if (h.kind !== 'pokemon') {
+            const qty = h.quantity != null ? h.quantity : 1;
+
+            return `<tr class="mtal-mkrow mkc-row sl-row" data-mh="${h.hid}"><td colspan="6">${mkItemCard(
+              h,
+              [
+                ['Quantidade', fmt(qty) + '×'],
+                ['Preço/un', mkCurTxt(h.price, h.currency), mkCurCls(h.currency)],
+                ['Total', mkCurTxt((h.price || 0) * qty, h.currency), mkCurCls(h.currency)]
+              ],
+              `<div class="mkc-side">
+                <small class="mk-dim">${h.raw.at ? esc(new Date(h.raw.at).toLocaleString('pt-BR')) : ''}</small>
                 <div class="mk-acts">
                   <button type="button" data-act="reprice" data-hid="${h.hid}" title="Alterar preço">✎</button>
                   <button type="button" data-act="cancel" data-hid="${h.hid}" title="Cancelar anúncio">✕</button>
@@ -11116,7 +11351,416 @@
     1500
   );
 
+  /* ---------- DAILY KILL (card fixo embaixo, no centro) ---------- */
+  const dk = { raw: null, t: 0, open: false, busy: false };
+
+  const dkNum = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+
+  function dkFindArr(o, depth) {
+    if (!o || typeof o !== 'object' || depth > 4) return null;
+
+    if (Array.isArray(o)) return o.length && o[0] && typeof o[0] === 'object' && ('speciesId' in o[0] || 'pokeId' in o[0] || 'species' in o[0]) ? o : null;
+
+    for (const k of ['options', 'choices', 'offers', 'targets', 'cards', 'mobs', 'pokemons', 'list']) {
+      const a = o[k] && dkFindArr(o[k], depth + 1);
+
+      if (a) return a;
+    }
+
+    for (const k in o) {
+      const a = o[k] && typeof o[k] === 'object' ? dkFindArr(o[k], depth + 1) : null;
+
+      if (a) return a;
+    }
+
+    return null;
+  }
+
+  // lê a resposta de /api/game/daily-kill sem depender de um formato exato
+  function dkParse(d) {
+    if (!d || typeof d !== 'object') return null;
+
+    const root = d.dailyKill || d.daily || d.mission || d.data || d;
+    const arr = dkFindArr(root, 0) || [];
+    let chosenId = pick(root, ['chosenSpeciesId', 'targetSpeciesId', 'pickedSpeciesId', 'speciesId', 'choice', 'chosen', 'selected', 'pick', 'target', 'current', 'active', 'picked']);
+
+    if (chosenId && typeof chosenId === 'object') chosenId = pick(chosenId, ['speciesId', 'pokeId', 'id']);
+
+    const chosenIdx = dkNum(pick(root, ['chosenIndex', 'choiceIndex', 'selectedIndex', 'pickedIndex', 'chosenIdx', 'choiceIdx']));
+
+    const opts = arr.map((o, i) => {
+      const x = { ...(o.species || {}), ...o };
+      const types = Array.isArray(x.types) ? x.types.map((t) => (typeof t === 'object' ? t.name || t.type : t)) : [x.type1, x.type2].filter(Boolean);
+      const sid = dkNum(pick(x, ['speciesId', 'pokeId', 'id']));
+      const isChosen =
+        !!pick(x, ['chosen', 'selected', 'picked', 'active', 'isChosen', 'current']) ||
+        (chosenIdx != null && chosenIdx === i) ||
+        (chosenId != null && typeof chosenId !== 'object' && typeof chosenId !== 'boolean' && dkNum(chosenId) === sid);
+
+      return {
+        i,
+        sid,
+        name: pick(x, ['name', 'speciesName', 'pokemonName']) || '#' + sid,
+        types,
+        xp: dkNum(pick(x, ['xp', 'xpReward', 'rewardXp', 'exp'])),
+        kills: dkNum(pick(x, ['kills', 'progress', 'count', 'killed', 'done', 'current'])) || 0,
+        need: dkNum(pick(x, ['need', 'target', 'required', 'goal', 'amount', 'total', 'quantity', 'qty'])),
+        chosen: isChosen,
+        raw: o
+      };
+    });
+
+    const ch = opts.find((o) => o.chosen) || null;
+
+    if (ch) {
+      const k = dkNum(pick(root, ['kills', 'progress', 'killed', 'count']));
+      const n = dkNum(pick(root, ['need', 'target', 'required', 'goal']));
+
+      if (k != null) ch.kills = k;
+      if (n != null) ch.need = n;
+    }
+
+    const rw = pick(root, ['rewards', 'reward', 'prizes', 'items', 'loot']);
+    let tier = pick(root, ['tier', 'band', 'difficulty', 'faixa', 'tierName', 'bandName', 'label', 'rank', 'level']);
+
+    if (tier && typeof tier === 'object') tier = pick(tier, ['name', 'label', 'key']);
+
+    return {
+      tier,
+      xp: dkNum(pick(root, ['xp', 'xpReward', 'missionXp', 'rewardXp'])),
+      mission: pick(root, ['mission', 'missionOfDay', 'dailyCount', 'completedToday']),
+      missionMax: dkNum(pick(root, ['missionMax', 'maxMissions', 'dailyMax'])),
+      done: !!pick(root, ['completed', 'done', 'finished', 'complete']),
+      claimed: !!pick(root, ['claimed', 'rewarded', 'collected']),
+      canClaim: !!pick(root, ['canClaim', 'claimable', 'ready']),
+      reroll: pick(root, ['rerollAt', 'resetAt', 'nextReset', 'nextRerollAt', 'expiresAt', 'endsAt']),
+      rewards: (Array.isArray(rw) ? rw : rw && typeof rw === 'object' ? Object.entries(rw).map(([k, v]) => (v && typeof v === 'object' ? { name: k, ...v } : { name: k, qty: v })) : [])
+        .filter((r) => r && typeof r === 'object')
+        .map((r) => ({
+          name: r.name || r.itemName || r.item || r.type || '',
+          qty: dkNum(pick(r, ['qty', 'quantity', 'amount', 'count', 'value'])),
+          icon: r.icon || r.iconUrl || r.image || ''
+        }))
+        .filter((r) => r.name && !/^xp$/i.test(r.name)),
+      opts,
+      chosen: ch
+    };
+  }
+
+  function dkSet(d) {
+    dk.raw = d;
+    dk.t = Date.now();
+    dk.st = dkParse(d);
+    dkRender();
+  }
+
+  async function dkLoad() {
+    try {
+      dkSet(await gameGet('/api/game/daily-kill'));
+    } catch (e) {
+      dk.err = String((e && e.message) || e);
+      dkRender();
+    }
+  }
+
+  function dkKill(j) {
+    const c = dk.st && dk.st.chosen;
+
+    if (!c || !j || +j.speciesId !== c.sid) return;
+
+    c.kills = (c.kills || 0) + 1;
+    dkRender();
+
+    if (c.need && c.kills >= c.need) setTimeout(dkLoad, 1500);
+  }
+
+  const dkSprite = (sid) => {
+    try {
+      return rpSprite({ kind: 'pokemon', raw: { speciesId: sid } }, null) || {};
+    } catch (e) {
+      return {};
+    }
+  };
+
+  const dkImg = (sid) => {
+    const sp = dkSprite(sid);
+
+    return sp.anim ? `<img src="${esc(sp.anim)}" data-fb="${esc(sp.still || '')}" onerror="if(this.dataset.fb){this.src=this.dataset.fb;this.dataset.fb=''}else{this.remove()}">` : '';
+  };
+
+  const dkBadge = (t) => {
+    const k = String(t).toLowerCase();
+    const bg = TYPE_COLOR[k] || '#6b7089';
+
+    return `<span class="dk-type" style="background:${bg};color:${rpTextOn(bg)}">${esc(RP_TYPE_PT[k] || cap(k))}</span>`;
+  };
+
+  function dkTimeLeft() {
+    const r = dk.st && dk.st.reroll;
+    const t = typeof r === 'number' ? (r < 1e12 ? r * 1000 : r) : r ? Date.parse(r) : NaN;
+
+    if (!Number.isFinite(t)) return '';
+
+    const s = Math.max(0, Math.round((t - Date.now()) / 1000));
+
+    return String(Math.floor(s / 3600)).padStart(2, '0') + ':' + String(Math.floor((s % 3600) / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+  }
+
+  const dkRewards = (st, small) =>
+    st.rewards.length
+      ? `<div class="dk-rws${small ? ' sm' : ''}">${st.rewards
+          .map(
+            (r) =>
+              `<span class="dk-rwi" title="${esc(r.name)}">${r.icon ? `<img src="${esc(iconUrl(r.icon))}" onerror="this.remove()">` : ''}<b>×${fmt(r.qty || 1)}</b>${small ? '' : ' ' + esc(r.name)}</span>`
+          )
+          .join('')}</div>`
+      : '';
+
+  function dkRender() {
+    let el = document.getElementById('mtal-dk');
+
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'mtal-dk';
+      document.body.appendChild(el);
+      el.addEventListener('click', dkClick);
+    }
+
+    const st = dk.st;
+
+    if (!st) {
+      el.innerHTML = '';
+      el.style.display = 'none';
+      return;
+    }
+
+    el.style.display = '';
+
+    const c = st.chosen;
+    const need = c && c.need != null ? c.need : null;
+    const kills = c ? c.kills || 0 : 0;
+    const pct = need ? Math.min(100, (kills / need) * 100) : 0;
+    const full = !!(c && need && kills >= need);
+    const doneToday = !!(st.claimed || (st.done && !full));
+    const mini = true;
+    const xp = (c && c.xp) || st.xp;
+
+    const head = `<div class="dk-hd">
+        ${st.tier ? `<span class="dk-tier">${esc(st.tier)}</span>` : '<span></span>'}
+        <span class="dk-hd-r">${c ? '<i class="dk-star">★</i>' : ''}</span>
+      </div>`;
+
+    let card;
+
+    if (doneToday) {
+      card = `<div class="dk-card dk-mini dk-over" data-dk="open">
+        <div class="dk-mrow">
+          <div class="dk-msp dk-ok">✓</div>
+          <div class="dk-minfo">
+            <b>Daily Kill concluída</b>
+            <span>${dkTimeLeft() ? 'libera em <em class="dk-timer">' + dkTimeLeft() + '</em>' : 'volta amanhã'}</span>
+          </div>
+          ${st.tier ? `<span class="dk-tier">${esc(st.tier)}</span>` : ''}
+        </div>
+      </div>`;
+    } else if (mini) {
+      card = `<div class="dk-card dk-mini${c ? '' : ' dk-q'}${full ? ' dk-full' : ''}" data-dk="open" title="Daily Kill">
+        <div class="dk-mrow">
+          <div class="dk-msp">${c ? dkImg(c.sid) || '❔' : '<b>?</b>'}</div>
+          <div class="dk-minfo">
+            <b>${c ? esc(c.name) : 'Daily Kill disponível'}</b>
+            ${c ? `<span><em>${fmt(kills)}</em> / ${need != null ? fmt(need) : '?'} kills${full && !st.claimed ? ' · <b class="dk-rdy">pronto para resgatar</b>' : ''}</span><div class="dk-bar"><i style="width:${pct}%"></i></div>` : '<span>clique para escolher</span>'}
+          </div>
+          ${st.tier ? `<span class="dk-tier">${esc(st.tier)}</span>` : ''}
+        </div>
+      </div>`;
+    } else if (c) {
+      card = `<div class="dk-card${full ? ' dk-full' : ''}" data-dk="open">
+        ${head}
+        <div class="dk-sp">${dkImg(c.sid) || '❔'}</div>
+        <small class="dk-num">#${String(c.sid || '').padStart(3, '0')}</small>
+        <b class="dk-name">${esc(c.name)}</b>
+        <div class="dk-types">${c.types.map(dkBadge).join('')}</div>
+        ${xp ? `<div class="dk-xp">✦ ${fmt(xp)} XP</div>` : ''}
+        <div class="dk-cnt"><em>${fmt(kills)}</em> / ${need != null ? fmt(need) : '?'}</div>
+        <div class="dk-bar"><i style="width:${pct}%"></i></div>
+        ${
+          full && !st.claimed
+            ? '<button type="button" class="dk-btn go" data-dk="claim">Resgatar</button>'
+            : st.claimed
+              ? '<div class="dk-btn done">Concluída ✓</div>'
+              : `<div class="dk-btn">Faltam ${need != null ? fmt(Math.max(0, need - kills)) : '?'}</div>`
+        }
+        <button type="button" class="dk-mbtn" data-dk="mini">Minimizar</button>
+      </div>`;
+    } else {
+      card = `<div class="dk-card dk-q" data-dk="open">
+        ${head}
+        <div class="dk-sp dk-qbox"><b>?</b></div>
+        <b class="dk-name">Daily Kill disponível</b>
+        <small class="dk-hint">${st.claimed ? 'Missão de hoje concluída ✓' : 'Clique para escolher o alvo de hoje'}</small>
+        ${st.xp ? `<div class="dk-xp">✦ ${fmt(st.xp)} XP</div>` : ''}
+        <button type="button" class="dk-mbtn" data-dk="mini">Minimizar</button>
+      </div>`;
+    }
+
+    el.innerHTML = card + (dk.open ? dkPicker(st) : '');
+  }
+
+  function dkPicker(st) {
+    return `<div class="dk-pick">
+      <div class="dk-pick-h">
+        <b>⚔ Daily Kill</b>
+        ${st.tier ? `<span class="dk-tier">${esc(st.tier)}</span>` : ''}
+        ${dkTimeLeft() ? `<span class="dk-dim">reroll em <b class="dk-timer">${dkTimeLeft()}</b></span>` : ''}
+        <button type="button" class="dk-x" data-dk="close">✕</button>
+      </div>
+      <div class="dk-rw"><span>Recompensa</span>${st.xp || (st.chosen && st.chosen.xp) ? `<em class="xp">✦ ${fmt((st.chosen && st.chosen.xp) || st.xp)} XP</em>` : ''}${dkRewards(st, false) || '<em class="dk-dim">—</em>'}</div>
+      <div class="dk-opts">${st.opts
+        .map(
+          (o) => `<div class="dk-opt${o.chosen ? ' on' : ''}${st.chosen && !o.chosen ? ' off' : ''}">
+            ${o.chosen ? '<span class="dk-star">★</span>' : ''}
+            <div class="dk-osp">${dkImg(o.sid) || '❔'}</div>
+            <small>#${String(o.sid || '').padStart(3, '0')}</small>
+            <b>${esc(o.name)}</b>
+            <div class="dk-types">${o.types.map(dkBadge).join('')}</div>
+            ${o.xp ? `<div class="dk-oxp">${fmt(o.xp)} XP</div>` : ''}
+            <div class="dk-ocnt"><b>${fmt(o.kills || 0)}</b> / ${o.need != null ? fmt(o.need) : '?'}</div>
+            ${
+              st.chosen
+                ? o.chosen
+                  ? `<div class="dk-obar"><i style="width:${o.need ? Math.min(100, (o.kills / o.need) * 100) : 0}%"></i></div><span class="dk-ostate">${o.need && o.kills >= o.need ? 'completo!' : 'faltam ' + fmt(Math.max(0, (o.need || 0) - (o.kills || 0)))}</span>`
+                  : '<span class="dk-ostate">não escolhida</span>'
+                : `<button type="button" class="dk-go" data-dk="choose" data-i="${o.i}">Escolher</button>`
+            }
+          </div>`
+        )
+        .join('') || '<div class="dk-dim">Sem opções hoje.</div>'}</div>
+      <div class="dk-foot">A escolha vale o dia inteiro.</div>
+    </div>`;
+  }
+
+  async function dkAction(kind, o) {
+    const lt = store.get(kind, null);
+    let url;
+    let body;
+
+    if (lt) {
+      url = lt.url;
+
+      try {
+        body = lt.body ? JSON.parse(lt.body) : {};
+      } catch (e) {
+        body = {};
+      }
+
+      if (o) {
+        ['speciesId', 'pokeId', 'targetSpeciesId'].forEach((k) => k in body && (body[k] = o.sid));
+        ['index', 'choice', 'idx', 'slot', 'option'].forEach((k) => k in body && (body[k] = o.i));
+      }
+    } else {
+      url = '/api/game/daily-kill/' + (kind === 'dkClaim' ? 'claim' : 'choose');
+      body = o ? { speciesId: o.sid, index: o.i } : {};
+    }
+
+    return gamePost(url, body);
+  }
+
+  function dkClick(e) {
+    const b = e.target.closest('[data-dk]');
+
+    if (!b || dk.busy) return;
+
+    const k = b.dataset.dk;
+
+    e.stopPropagation();
+
+    if (k === 'open') {
+      dk.open = !dk.open;
+      dkRender();
+
+      if (dk.open) dkLoad();
+
+      return;
+    }
+
+    if (k === 'close') {
+      dk.open = false;
+      dkRender();
+      return;
+    }
+
+    if (k === 'mini') {
+      const toMini = !store.get('dkMini', false);
+
+      store.set('dkMini', toMini);
+
+      if (toMini) dk.open = false;
+
+      dkRender();
+      return;
+    }
+
+    if (k === 'choose' || k === 'claim') {
+      const o = k === 'choose' ? (dk.st.opts || [])[+b.dataset.i] : null;
+
+      if (k === 'choose' && !confirm('Escolher ' + (o && o.name) + ' como alvo de hoje? A escolha vale o dia inteiro.')) return;
+
+      dk.busy = true;
+      b.disabled = true;
+      dkAction(k === 'choose' ? 'dkChoose' : 'dkClaim', o)
+        .then((r) => {
+          toast(k === 'choose' ? 'Daily Kill: ' + (o && o.name) + ' escolhido!' : 'Daily Kill resgatado!');
+
+          if (r && typeof r === 'object' && dkFindArr(r, 0)) dkSet(r);
+          else dkLoad();
+        })
+        .catch((err) =>
+          toast(
+            'Daily Kill: ' +
+              ((err && err.message) || err) +
+              (store.get(k === 'choose' ? 'dkChoose' : 'dkClaim', null) ? '' : ' — faça isso 1x pela janela do jogo para eu aprender.')
+          )
+        )
+        .finally(() => {
+          dk.busy = false;
+        });
+    }
+  }
+
+  setTimeout(dkLoad, 5000);
+  setInterval(dkLoad, 120000);
+  setInterval(() => {
+    const tl = document.querySelector('#mtal-dk .dk-timer');
+
+    if (tl) tl.textContent = dkTimeLeft();
+  }, 1000);
+
   PW.MarketAlerts = {
+    dk() {
+      gameGet('/api/game/daily-kill').then((d) => console.log(JSON.stringify(d, null, 1)));
+      return 'buscando…';
+    },
+    gravar() {
+      netCap.log = [];
+      netCap.on = true;
+      console.log('%c[LiveSearch] gravando… faça a ação no jogo e depois rode: MarketAlerts.parar()', 'color:#61f6a4');
+    },
+    parar() {
+      netCap.on = false;
+
+      const txt = JSON.stringify({ v: VERSION, log: netCap.log }, null, 1);
+
+      console.log(txt);
+      try {
+        navigator.clipboard.writeText(txt).then(
+          () => console.log('%c✅ copiado — cole no chat', 'color:#61f6a4'),
+          () => console.log('%cSelecione o texto acima e copie (Ctrl+C).', 'color:#f0d78c')
+        );
+      } catch (e) {}
+
+      return netCap.log.length + ' registros';
+    },
     state,
     api,
     poll,
