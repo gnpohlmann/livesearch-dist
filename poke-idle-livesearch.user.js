@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.7.2
+// @version      0.7.3
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -21,7 +21,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.7.2';
+  const VERSION = '0.7.3';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -11699,6 +11699,9 @@
       #pdk-root .pdk-go{width:calc(100% - 20px);height:30px;margin-top:4px;background:transparent;border:1px solid #2c4658;border-radius:7px;color:var(--tx);font:inherit;font-weight:700;cursor:pointer;transition:background .12s,border-color .12s}
       #pdk-root .pdk-go:hover{background:#e3eaf1;border-color:#e3eaf1;color:#0c141b}
       #pdk-root .pdk-go.arm,#pdk-root .pdk-rrbtn.arm{background:var(--ok);border-color:var(--ok);color:#08210f}
+      #pdk-root .pdk-claim{background:var(--ok);border-color:var(--ok);color:#08210f}
+      #pdk-root .pdk-claim:hover{background:#6fe29d;border-color:#6fe29d;color:#08210f}
+      #pdk-root .pdk-ok2{color:var(--ok);font-weight:700}
 
       #pdk-root .pdk-rr{display:flex;align-items:center;gap:12px;margin:0 14px 12px;padding:8px 10px 8px 12px;border:1px solid var(--line);border-radius:9px;background:var(--row)}
       #pdk-root .pdk-rr > div{flex:1;min-width:0}
@@ -12094,9 +12097,13 @@
               ${
                 st.chosen
                   ? o.chosen
-                    ? `<div class="pdk-obar"><i style="width:${o.need ? Math.min(100, (o.kills / o.need) * 100) : 0}%"></i></div><span class="pdk-ostate">${
-                        o.need && o.kills >= o.need ? 'completo!' : 'faltam ' + fmt(Math.max(0, (o.need || 0) - (o.kills || 0)))
-                      }</span>`
+                    ? `<div class="pdk-obar"><i style="width:${o.need ? Math.min(100, (o.kills / o.need) * 100) : 0}%"></i></div>${
+                        st.claimed
+                          ? '<span class="pdk-ostate pdk-ok2">Resgatado ✓</span>'
+                          : o.need && o.kills >= o.need
+                            ? '<button type="button" class="pdk-go pdk-claim" data-dk="claim">🎁 Resgatar</button>'
+                            : `<span class="pdk-ostate">faltam ${fmt(Math.max(0, (o.need || 0) - (o.kills || 0)))}</span>`
+                      }`
                     : '<span class="pdk-ostate">não escolhida</span>'
                   : `<button type="button" class="pdk-go${dk.arm === 'choose:' + o.i ? ' arm' : ''}" data-dk="choose" data-i="${o.i}">${dk.arm === 'choose:' + o.i ? 'Confirmar?' : 'Escolher'}</button>`
               }
@@ -12138,6 +12145,16 @@
       } else {
         url = '/api/game/daily-kill/' + (kind === 'dkClaim' ? 'claim' : kind === 'dkReroll' ? 'reroll' : 'pick');
         body = o ? { idx: o.i, index: o.i, speciesId: o.sid } : {};
+
+        if (kind === 'dkClaim') {
+          for (const u of ['/api/game/daily-kill/claim', '/api/game/daily-kill/collect', '/api/game/daily-kill/reward']) {
+            try {
+              return await gamePost(u, {});
+            } catch (e) {
+              if (!/HTTP 404|not found/i.test(String((e && e.message) || e))) throw e;
+            }
+          }
+        }
       }
 
       return gamePost(url, body);
