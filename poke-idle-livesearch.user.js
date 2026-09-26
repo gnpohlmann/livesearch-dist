@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.4.92
+// @version      0.6.0
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -21,7 +21,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.92';
+  const VERSION = '0.6.0';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -11390,390 +11390,966 @@
     1500
   );
 
-  /* ---------- DAILY KILL (card fixo embaixo, no centro) ---------- */
-  const dk = { raw: null, t: 0, open: false, busy: false };
+  /* ---------- DAILY KILL (card fixo embaixo, no centro) — código do antigo script "Poke Idle - Daily Kill" ---------- */
+  // Os ganchos de fetch/WebSocket do LiveSearch chamam estas três; elas repassam para o bloco abaixo.
+  const DKX = {};
+  const DK_LS_STORE = store;
 
-  const dkNum = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
-
-  function dkFindArr(o, depth) {
-    if (!o || typeof o !== 'object' || depth > 4) return null;
-
-    if (Array.isArray(o)) return o.length && o[0] && typeof o[0] === 'object' && ('speciesId' in o[0] || 'pokeId' in o[0] || 'species' in o[0]) ? o : null;
-
-    for (const k of ['options', 'choices', 'offers', 'targets', 'cards', 'mobs', 'pokemons', 'list']) {
-      const a = o[k] && dkFindArr(o[k], depth + 1);
-
-      if (a) return a;
-    }
-
-    for (const k in o) {
-      const a = o[k] && typeof o[k] === 'object' ? dkFindArr(o[k], depth + 1) : null;
-
-      if (a) return a;
-    }
-
-    return null;
-  }
-
-  // lê a resposta de /api/game/daily-kill sem depender de um formato exato
-  function dkParse(d) {
-    if (!d || typeof d !== 'object') return null;
-
-    const root = d.dailyKill || d.daily || d.mission || d.data || d;
-    const arr = dkFindArr(root, 0) || [];
-    let chosenId = pick(root, ['chosenSpeciesId', 'targetSpeciesId', 'pickedSpeciesId', 'speciesId', 'choice', 'chosen', 'selected', 'pick', 'target', 'current', 'active', 'picked']);
-
-    if (chosenId && typeof chosenId === 'object') chosenId = pick(chosenId, ['speciesId', 'pokeId', 'id']);
-
-    const chosenIdx = dkNum(pick(root, ['chosenIndex', 'choiceIndex', 'selectedIndex', 'pickedIndex', 'chosenIdx', 'choiceIdx']));
-
-    const opts = arr.map((o, i) => {
-      const x = { ...(o.species || {}), ...o };
-      const types = Array.isArray(x.types) ? x.types.map((t) => (typeof t === 'object' ? t.name || t.type : t)) : [x.type1, x.type2].filter(Boolean);
-      const sid = dkNum(pick(x, ['speciesId', 'pokeId', 'id']));
-      const isChosen =
-        !!pick(x, ['chosen', 'selected', 'picked', 'active', 'isChosen', 'current']) ||
-        (chosenIdx != null && chosenIdx === i) ||
-        (chosenId != null && typeof chosenId !== 'object' && typeof chosenId !== 'boolean' && dkNum(chosenId) === sid);
-
-      return {
-        i,
-        sid,
-        name: pick(x, ['name', 'speciesName', 'pokemonName']) || '#' + sid,
-        types,
-        xp: dkNum(pick(x, ['xp', 'xpReward', 'rewardXp', 'exp'])),
-        kills: dkNum(pick(x, ['kills', 'progress', 'count', 'killed', 'done', 'current'])) || 0,
-        need: dkNum(pick(x, ['need', 'target', 'required', 'goal', 'amount', 'total', 'quantity', 'qty'])),
-        chosen: isChosen,
-        raw: o
-      };
-    });
-
-    const ch = opts.find((o) => o.chosen) || null;
-
-    if (ch) {
-      const k = dkNum(pick(root, ['kills', 'progress', 'killed', 'count']));
-      const n = dkNum(pick(root, ['need', 'target', 'required', 'goal']));
-
-      if (k != null) ch.kills = k;
-      if (n != null) ch.need = n;
-    }
-
-    const rw = pick(root, ['rewards', 'reward', 'prizes', 'items', 'loot']);
-    let tier = pick(root, ['tier', 'band', 'difficulty', 'faixa', 'tierName', 'bandName', 'label', 'rank', 'level']);
-
-    if (tier && typeof tier === 'object') tier = pick(tier, ['name', 'label', 'key']);
-
-    return {
-      tier,
-      xp: dkNum(pick(root, ['xp', 'xpReward', 'missionXp', 'rewardXp'])),
-      mission: pick(root, ['mission', 'missionOfDay', 'dailyCount', 'completedToday']),
-      missionMax: dkNum(pick(root, ['missionMax', 'maxMissions', 'dailyMax'])),
-      done: !!pick(root, ['completed', 'done', 'finished', 'complete']),
-      claimed: !!pick(root, ['claimed', 'rewarded', 'collected']),
-      canClaim: !!pick(root, ['canClaim', 'claimable', 'ready']),
-      reroll: pick(root, ['rerollAt', 'resetAt', 'nextReset', 'nextRerollAt', 'expiresAt', 'endsAt']),
-      rewards: (Array.isArray(rw) ? rw : rw && typeof rw === 'object' ? Object.entries(rw).map(([k, v]) => (v && typeof v === 'object' ? { name: k, ...v } : { name: k, qty: v })) : [])
-        .filter((r) => r && typeof r === 'object')
-        .map((r) => ({
-          name: r.name || r.itemName || r.item || r.type || '',
-          qty: dkNum(pick(r, ['qty', 'quantity', 'amount', 'count', 'value'])),
-          icon: r.icon || r.iconUrl || r.image || ''
-        }))
-        .filter((r) => r.name && !/^xp$/i.test(r.name)),
-      opts,
-      chosen: ch
-    };
+  function dkLoad() {
+    return DKX.load ? DKX.load() : undefined;
   }
 
   function dkSet(d) {
-    dk.raw = d;
-    dk.t = Date.now();
-    dk.st = dkParse(d);
-    dkRender();
-  }
-
-  async function dkLoad() {
-    try {
-      dkSet(await gameGet('/api/game/daily-kill'));
-    } catch (e) {
-      dk.err = String((e && e.message) || e);
-      dkRender();
-    }
+    if (DKX.set) DKX.set(d);
   }
 
   function dkKill(j) {
-    const c = dk.st && dk.st.chosen;
-
-    if (!c || !j || +j.speciesId !== c.sid) return;
-
-    c.kills = (c.kills || 0) + 1;
-    dkRender();
-
-    if (c.need && c.kills >= c.need) setTimeout(dkLoad, 1500);
+    if (DKX.kill) DKX.kill(j);
   }
 
-  const dkSprite = (sid) => {
-    try {
-      return rpSprite({ kind: 'pokemon', raw: { speciesId: sid } }, null) || {};
-    } catch (e) {
-      return {};
-    }
-  };
+  (() => {
 
-  const dkImg = (sid) => {
-    const sp = dkSprite(sid);
+    /* ---------- utilitários ---------- */
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const fmt = (n) => Number(n).toLocaleString('pt-BR');
+    const cap = (s) => String(s).charAt(0).toUpperCase() + String(s).slice(1).toLowerCase();
+    const pick = (obj, keys) => {
+      for (const k of keys) {
+        if (obj && obj[k] != null && obj[k] !== '') return obj[k];
+      }
 
-    return sp.anim ? `<img src="${esc(sp.anim)}" data-fb="${esc(sp.still || '')}" onerror="if(this.dataset.fb){this.src=this.dataset.fb;this.dataset.fb=''}else{this.remove()}">` : '';
-  };
+      return null;
+    };
+    const iconUrl = (v) => (!v ? '' : /^(\/|https?:|data:)/i.test(String(v)) ? v : '/assets/items/' + v);
+    const rpTextOn = (hex) => {
+      const n = parseInt(String(hex).slice(1), 16);
+      const l = 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255);
 
-  const dkBadge = (t) => {
-    const k = String(t).toLowerCase();
-    const bg = TYPE_COLOR[k] || '#6b7089';
+      return l > 140 ? '#15171f' : '#fff';
+    };
+    const log = (...a) => console.log('%\x63[DailyKill]', 'color:#e0b95a;font-weight:bold', ...a);
 
-    return `<span class="dk-type" style="background:${bg};color:${rpTextOn(bg)}">${esc(RP_TYPE_PT[k] || cap(k))}</span>`;
-  };
+    // localStorage pode estar cheio: memória primeiro, grava quando der.
+    const mem = new Map();
+    const store = {
+      get(k, d) {
+        if (mem.has(k)) return mem.get(k);
 
-  function dkTimeLeft() {
-    const r = dk.st && dk.st.reroll;
-    const t = typeof r === 'number' ? (r < 1e12 ? r * 1000 : r) : r ? Date.parse(r) : NaN;
+        for (const S of [localStorage, sessionStorage]) {
+          try {
+            const v = S.getItem('dk_' + k);
 
-    if (!Number.isFinite(t)) return '';
+            if (v != null) {
+              const j = JSON.parse(v);
 
-    const s = Math.max(0, Math.round((t - Date.now()) / 1000));
+              mem.set(k, j);
 
-    return String(Math.floor(s / 3600)).padStart(2, '0') + ':' + String(Math.floor((s % 3600) / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
-  }
-
-  const dkRewards = (st, small) =>
-    st.rewards.length
-      ? `<div class="dk-rws${small ? ' sm' : ''}">${st.rewards
-          .map(
-            (r) =>
-              `<span class="dk-rwi" title="${esc(r.name)}">${r.icon ? `<img src="${esc(iconUrl(r.icon))}" onerror="this.remove()">` : ''}<b>×${fmt(r.qty || 1)}</b>${small ? '' : ' ' + esc(r.name)}</span>`
-          )
-          .join('')}</div>`
-      : '';
-
-  function dkRender() {
-    let el = document.getElementById('mtal-dk');
-
-    if (!el) {
-      el = document.createElement('div');
-      el.id = 'mtal-dk';
-      document.body.appendChild(el);
-      el.addEventListener('click', dkClick);
-    }
-
-    const st = dk.st;
-
-    if (!st) {
-      el.innerHTML = '';
-      el.style.display = 'none';
-      return;
-    }
-
-    el.style.display = '';
-
-    const c = st.chosen;
-    const need = c && c.need != null ? c.need : null;
-    const kills = c ? c.kills || 0 : 0;
-    const pct = need ? Math.min(100, (kills / need) * 100) : 0;
-    const full = !!(c && need && kills >= need);
-    const doneToday = !!(st.claimed || (st.done && !full));
-    const mini = true;
-    const xp = (c && c.xp) || st.xp;
-
-    const head = `<div class="dk-hd">
-        ${st.tier ? `<span class="dk-tier">${esc(st.tier)}</span>` : '<span></span>'}
-        <span class="dk-hd-r">${c ? '<i class="dk-star">★</i>' : ''}</span>
-      </div>`;
-
-    let card;
-
-    if (doneToday) {
-      card = `<div class="dk-card dk-mini dk-over" data-dk="open">
-        <div class="dk-mrow">
-          <div class="dk-msp dk-ok">✓</div>
-          <div class="dk-minfo">
-            <b>Daily Kill concluída</b>
-            <span>${dkTimeLeft() ? 'libera em <em class="dk-timer">' + dkTimeLeft() + '</em>' : 'volta amanhã'}</span>
-          </div>
-          ${st.tier ? `<span class="dk-tier">${esc(st.tier)}</span>` : ''}
-        </div>
-      </div>`;
-    } else if (mini) {
-      card = `<div class="dk-card dk-mini${c ? '' : ' dk-q'}${full ? ' dk-full' : ''}" data-dk="open" title="Daily Kill">
-        <div class="dk-mrow">
-          <div class="dk-msp">${c ? dkImg(c.sid) || '❔' : '<b>?</b>'}</div>
-          <div class="dk-minfo">
-            <b>${c ? esc(c.name) : 'Daily Kill disponível'}</b>
-            ${c ? `<span><em>${fmt(kills)}</em> / ${need != null ? fmt(need) : '?'} kills${full && !st.claimed ? ' · <b class="dk-rdy">pronto para resgatar</b>' : ''}</span><div class="dk-bar"><i style="width:${pct}%"></i></div>` : '<span>clique para escolher</span>'}
-          </div>
-          ${st.tier ? `<span class="dk-tier">${esc(st.tier)}</span>` : ''}
-        </div>
-      </div>`;
-    } else if (c) {
-      card = `<div class="dk-card${full ? ' dk-full' : ''}" data-dk="open">
-        ${head}
-        <div class="dk-sp">${dkImg(c.sid) || '❔'}</div>
-        <small class="dk-num">#${String(c.sid || '').padStart(3, '0')}</small>
-        <b class="dk-name">${esc(c.name)}</b>
-        <div class="dk-types">${c.types.map(dkBadge).join('')}</div>
-        ${xp ? `<div class="dk-xp">✦ ${fmt(xp)} XP</div>` : ''}
-        <div class="dk-cnt"><em>${fmt(kills)}</em> / ${need != null ? fmt(need) : '?'}</div>
-        <div class="dk-bar"><i style="width:${pct}%"></i></div>
-        ${
-          full && !st.claimed
-            ? '<button type="button" class="dk-btn go" data-dk="claim">Resgatar</button>'
-            : st.claimed
-              ? '<div class="dk-btn done">Concluída ✓</div>'
-              : `<div class="dk-btn">Faltam ${need != null ? fmt(Math.max(0, need - kills)) : '?'}</div>`
-        }
-        <button type="button" class="dk-mbtn" data-dk="mini">Minimizar</button>
-      </div>`;
-    } else {
-      card = `<div class="dk-card dk-q" data-dk="open">
-        ${head}
-        <div class="dk-sp dk-qbox"><b>?</b></div>
-        <b class="dk-name">Daily Kill disponível</b>
-        <small class="dk-hint">${st.claimed ? 'Missão de hoje concluída ✓' : 'Clique para escolher o alvo de hoje'}</small>
-        ${st.xp ? `<div class="dk-xp">✦ ${fmt(st.xp)} XP</div>` : ''}
-        <button type="button" class="dk-mbtn" data-dk="mini">Minimizar</button>
-      </div>`;
-    }
-
-    el.innerHTML = card + (dk.open ? dkPicker(st) : '');
-  }
-
-  function dkPicker(st) {
-    return `<div class="dk-pick">
-      <div class="dk-pick-h">
-        <b>⚔ Daily Kill</b>
-        ${st.tier ? `<span class="dk-tier">${esc(st.tier)}</span>` : ''}
-        ${dkTimeLeft() ? `<span class="dk-dim">reroll em <b class="dk-timer">${dkTimeLeft()}</b></span>` : ''}
-        <button type="button" class="dk-x" data-dk="close">✕</button>
-      </div>
-      <div class="dk-rw"><span>Recompensa</span>${st.xp || (st.chosen && st.chosen.xp) ? `<em class="xp">✦ ${fmt((st.chosen && st.chosen.xp) || st.xp)} XP</em>` : ''}${dkRewards(st, false) || '<em class="dk-dim">—</em>'}</div>
-      <div class="dk-opts">${st.opts
-        .map(
-          (o) => `<div class="dk-opt${o.chosen ? ' on' : ''}${st.chosen && !o.chosen ? ' off' : ''}">
-            ${o.chosen ? '<span class="dk-star">★</span>' : ''}
-            <div class="dk-osp">${dkImg(o.sid) || '❔'}</div>
-            <small>#${String(o.sid || '').padStart(3, '0')}</small>
-            <b>${esc(o.name)}</b>
-            <div class="dk-types">${o.types.map(dkBadge).join('')}</div>
-            ${o.xp ? `<div class="dk-oxp">${fmt(o.xp)} XP</div>` : ''}
-            <div class="dk-ocnt"><b>${fmt(o.kills || 0)}</b> / ${o.need != null ? fmt(o.need) : '?'}</div>
-            ${
-              st.chosen
-                ? o.chosen
-                  ? `<div class="dk-obar"><i style="width:${o.need ? Math.min(100, (o.kills / o.need) * 100) : 0}%"></i></div><span class="dk-ostate">${o.need && o.kills >= o.need ? 'completo!' : 'faltam ' + fmt(Math.max(0, (o.need || 0) - (o.kills || 0)))}</span>`
-                  : '<span class="dk-ostate">não escolhida</span>'
-                : `<button type="button" class="dk-go" data-dk="choose" data-i="${o.i}">Escolher</button>`
+              return j;
             }
-          </div>`
-        )
-        .join('') || '<div class="dk-dim">Sem opções hoje.</div>'}</div>
-      <div class="dk-foot">A escolha vale o dia inteiro.</div>
-    </div>`;
-  }
+          } catch (e) {}
+        }
 
-  async function dkAction(kind, o) {
-    const lt = store.get(kind, null);
-    let url;
-    let body;
+        return d;
+      },
+      set(k, v) {
+        mem.set(k, v);
 
-    if (lt) {
-      url = lt.url;
+        const txt = JSON.stringify(v);
+
+        for (const S of [localStorage, sessionStorage]) {
+          try {
+            S.setItem('dk_' + k, txt);
+
+            return;
+          } catch (e) {}
+        }
+      }
+    };
+
+    function toast(msg) {
+      log(msg);
+
+      const d = document.createElement('div');
+
+      d.textContent = msg;
+      d.style.cssText =
+        'position:fixed;left:50%;bottom:120px;transform:translateX(-50%);z-index:2147483647;background:#1a1a2e;color:#f0d78c;border:1px solid #c9a44a;padding:8px 12px;border-radius:8px;font:12px Inter,sans-serif;max-width:320px';
+      document.body.appendChild(d);
+      setTimeout(() => d.remove(), 4500);
+    }
+
+    const TYPE_COLOR = {
+      fogo: '#f08030',
+      fire: '#f08030',
+      água: '#6890f0',
+      agua: '#6890f0',
+      water: '#6890f0',
+      elétrico: '#f8d030',
+      eletrico: '#f8d030',
+      electric: '#f8d030',
+      planta: '#78c850',
+      grass: '#78c850',
+      gelo: '#98d8d8',
+      ice: '#98d8d8',
+      lutador: '#c03028',
+      fighting: '#c03028',
+      venenoso: '#a040a0',
+      poison: '#a040a0',
+      terra: '#e0c068',
+      ground: '#e0c068',
+      voador: '#a890f0',
+      flying: '#a890f0',
+      psíquico: '#f85888',
+      psiquico: '#f85888',
+      psychic: '#f85888',
+      inseto: '#a8b820',
+      bug: '#a8b820',
+      pedra: '#b8a038',
+      rock: '#b8a038',
+      fantasma: '#705898',
+      ghost: '#705898',
+      dragão: '#7038f8',
+      dragao: '#7038f8',
+      dragon: '#7038f8',
+      sombrio: '#705848',
+      dark: '#705848',
+      metálico: '#b8b8d0',
+      metalico: '#b8b8d0',
+      steel: '#b8b8d0',
+      fada: '#ee99ac',
+      fairy: '#ee99ac',
+      normal: '#a8a878'
+    };
+
+    const RP_TYPE_PT = {
+      normal: 'Normal', fire: 'Fogo', water: 'Água', electric: 'Elétrico', grass: 'Planta', ice: 'Gelo',
+      fighting: 'Lutador', poison: 'Veneno', ground: 'Terra', flying: 'Voador', psychic: 'Psíquico', bug: 'Inseto',
+      rock: 'Pedra', ghost: 'Fantasma', dragon: 'Dragão', dark: 'Sombrio', steel: 'Aço', fairy: 'Fada'
+    };
+
+    /* ---------- API do jogo (token da sessão) ---------- */
+    const tokens = () => {
+      try {
+        return JSON.parse(sessionStorage.getItem('pokeweb:tokens') || 'null');
+      } catch (e) {
+        return null;
+      }
+    };
+
+    async function req(path, opt = {}) {
+      const send = (t) =>
+        NF(path, {
+          ...opt,
+          headers: { ...(opt.body ? { 'content-type': 'application/json' } : {}), ...(t ? { authorization: 'Bearer ' + t } : {}) }
+        });
+      let r = await send(tokens() && tokens().accessToken);
+
+      if (r.status === 401 && tokens() && tokens().refreshToken) {
+        const rr = await NF('/api/auth/refresh', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ refreshToken: tokens().refreshToken })
+        });
+
+        if (rr.ok) {
+          const j = await rr.json();
+
+          if (j && j.accessToken) {
+            sessionStorage.setItem('pokeweb:tokens', JSON.stringify(j));
+            r = await send(j.accessToken);
+          }
+        }
+      }
+
+      const data = await r.json().catch(() => null);
+
+      if (!r.ok || (data && data.ok === false)) throw new Error((data && (data.error || data.message)) || 'HTTP ' + r.status);
+
+      return data;
+    }
+
+    const gameGet = (path) => req(path);
+    const gamePost = (path, body) => req(path, { method: 'POST', body: JSON.stringify(body) });
+
+    /* ---------- ganchos: dentro do LiveSearch, os ganchos de fetch/WebSocket do próprio LiveSearch
+       chamam dkLoad/dkSet/dkKill (ligados abaixo em DKX); aqui só usamos o fetch da página ---------- */
+    const NF = (...a) => PW.fetch(...a);
+
+    /* ---------- estilos ---------- */
+    const CSS = `
+      #pdk-root{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);z-index:2147483640;font:12px/1.35 Inter,sans-serif;color:#e8e3d0}
+      #pdk-root .pdk-card{position:relative;display:flex;flex-direction:column;align-items:center;gap:4px;width:180px;box-sizing:border-box;padding:10px 12px 12px;background:linear-gradient(180deg,#1b1f31,#12141f);border:1px solid #3a4060;border-radius:14px;box-shadow:0 10px 28px rgba(0,0,0,.55);cursor:pointer;text-align:center}
+      #pdk-root .pdk-card:hover{border-color:#8b93b8}
+      #pdk-root .pdk-card.pdk-q{border-color:#c9a44a;animation:dkPulse 2.2s ease-in-out infinite}
+      #pdk-root .pdk-card.pdk-full{border-color:#61f6a4}
+      @keyframes dkPulse{0%,100%{box-shadow:0 10px 28px rgba(0,0,0,.55)}50%{box-shadow:0 0 0 5px rgba(240,215,140,.16),0 10px 28px rgba(0,0,0,.55)}}
+      #pdk-root .pdk-hd{display:flex;align-items:center;justify-content:space-between;width:100%;min-height:18px}
+      #pdk-root .pdk-hd-r{display:flex;align-items:center;gap:4px}
+      #pdk-root .pdk-star{font-style:normal;color:#f0c14b}
+      #pdk-root .pdk-mbtn{margin-top:2px;padding:3px 10px;background:transparent;border:none;border-radius:6px;color:#7c829c;font:inherit;font-size:10px;cursor:pointer}
+      #pdk-root .pdk-mbtn:hover{color:#e8eaf2;background:#1f2436}
+      #pdk-root .pdk-min{width:20px;height:18px;padding:0;background:transparent;border:1px solid transparent;border-radius:5px;color:#7c829c;font-size:11px;cursor:pointer}
+      #pdk-root .pdk-min:hover{border-color:#4a4f66;color:#fff}
+      #pdk-root .pdk-tier{padding:1px 8px;border:1px solid #6b5a1f;border-radius:999px;background:#2a2410;color:#f0c14b;font-size:10px;font-weight:800;letter-spacing:.03em;white-space:nowrap}
+      #pdk-root .pdk-sp{display:grid;place-items:center;width:80%;aspect-ratio:1/1.12;margin:2px 0 4px;border-radius:14px;background:radial-gradient(circle at 50% 40%,#232842,#0d0f18);border:1px solid #2c3148;overflow:hidden}
+      #pdk-root .pdk-sp img{width:78%;height:auto;max-height:90%;object-fit:contain;image-rendering:pixelated}
+      #pdk-root .pdk-qbox{border-color:#6b5a1f;background:radial-gradient(circle at 50% 40%,#3a3016,#12141f)}
+      #pdk-root .pdk-qbox b{font-size:78px;line-height:1;color:#f0c14b;text-shadow:0 0 18px rgba(240,193,75,.45)}
+      #pdk-root .pdk-num{font-size:9.5px;color:#7c829c}
+      #pdk-root .pdk-name{font-size:12px;color:#f2ead0}
+      #pdk-root .pdk-q .pdk-name{font-size:11.5px}
+      #pdk-root .pdk-hint{font-size:9.5px;color:#9aa0b8}
+      #pdk-root .pdk-types{display:flex;gap:4px;justify-content:center}
+      #pdk-root .pdk-xp{font-size:10.5px;font-weight:800;color:#f0c14b}
+      #pdk-root .pdk-cnt{font-size:11px;color:#9aa0b8}
+      #pdk-root .pdk-cnt em{font-style:normal;font-size:17px;font-weight:800;color:#55d6f0}
+      #pdk-root .pdk-bar{width:100%;height:6px;background:#2c3148;border-radius:3px;overflow:hidden}
+      #pdk-root .pdk-bar i{display:block;height:100%;background:linear-gradient(90deg,#55d6f0,#61f6a4);border-radius:3px}
+      #pdk-root .pdk-rws{display:flex;flex-wrap:wrap;justify-content:center;gap:4px}
+      #pdk-root .pdk-rwi{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:999px;background:#1f2436;border:1px solid #2c3148;font-size:10.5px;color:#c7cbe0;white-space:nowrap}
+      #pdk-root .pdk-rwi img{width:16px;height:16px;image-rendering:pixelated}
+      #pdk-root .pdk-rwi b{color:#f2ead0}
+      #pdk-root .pdk-btn{width:100%;margin-top:4px;padding:6px 0;border-radius:8px;background:#232840;border:1px solid #2c3148;color:#9aa0b8;font-size:11px;font-weight:700}
+      #pdk-root .pdk-btn.go{background:#e8eaf2;border-color:#e8eaf2;color:#12141f;cursor:pointer}
+      #pdk-root .pdk-full .pdk-btn.go{background:#61f6a4;border-color:#61f6a4;color:#0d1a12}
+      #pdk-root .pdk-btn.done{background:#1d3325;border-color:#2e7d4f;color:#61f6a4}
+      #pdk-root .pdk-card.pdk-mini{width:auto;min-width:0;max-width:380px;padding:7px 12px 7px 7px;gap:4px}
+      #pdk-root .pdk-mini .pdk-minfo{flex:0 1 auto;min-width:110px}
+      #pdk-root .pdk-mini .pdk-bar{width:100%;min-width:130px;height:4px;margin-top:1px;background:#2e3550}
+      #pdk-root .pdk-rdy{color:#61f6a4}
+      #pdk-root .pdk-mrow{display:flex!important;flex-direction:row!important;align-items:center!important;gap:10px;width:100%;text-align:left}
+      #pdk-root .pdk-msp{flex:none;display:grid;place-items:center;width:58px;height:58px;border-radius:12px;background:radial-gradient(circle at 50% 60%,#232842,#0d0f18);border:1px solid #2c3148;overflow:hidden}
+      #pdk-root .pdk-msp img{max-width:56px;max-height:56px;image-rendering:pixelated}
+      #pdk-root .pdk-tp{flex:none;align-self:center;width:40px;height:40px;padding:0;display:grid;place-items:center;border-radius:10px;border:1px solid #2c3148;background:#151827;color:#c7cbe0;cursor:pointer}
+      #pdk-root,#pdk-root *{translate:none!important}
+      #pdk-root .pdk-card,#pdk-root .pdk-card:hover,#pdk-root button,#pdk-root button:hover{transform:none!important;top:auto!important;margin-top:0}
+      #pdk-root .pdk-mt{font-size:inherit;color:#7c829c}
+      #pdk-root .pdk-mt b{font-weight:700;color:#c7cbe0;font-variant-numeric:tabular-nums}
+      #pdk-root .pdk-tp:hover{border-color:#8b93b8;background:#1e2336;color:#fff}
+      #pdk-root .pdk-tp.busy{opacity:.5;pointer-events:none}
+      #pdk-root .pdk-msp b{font-size:24px;color:#f0c14b}
+      #pdk-root .pdk-minfo{flex:1;min-width:0;align-self:center!important;display:flex!important;flex-direction:column!important;justify-content:center!important;gap:4px;margin:0!important;padding:0!important;line-height:1.2}
+      #pdk-root .pdk-minfo > *{margin:0!important}
+      #pdk-root .pdk-minfo > b{font-size:12px;color:#f2ead0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      #pdk-root .pdk-minfo span{font-size:10.5px;color:#9aa0b8;white-space:nowrap}
+      #pdk-root .pdk-minfo em{font-style:normal;font-weight:800;color:#55d6f0}
+      #pdk-root .pdk-over{border-color:#2e7d4f}
+      #pdk-root .pdk-ok{background:#1d3325;border-color:#2e7d4f;color:#61f6a4;font-size:20px;font-weight:800}
+      #pdk-root .pdk-pick{--bg:#0c141b;--row:#121e28;--row2:#172633;--line:#1b2b38;--tx:#e3eaf1;--dim:#768a9c;--xp:#9ec9ff;--ok:#57d38c;
+        position:absolute;left:50%;bottom:calc(100% + 10px);transform:translateX(-50%);width:min(720px,94vw);box-sizing:border-box;padding:0;overflow:hidden;
+        background:var(--bg);color:var(--tx);border:1px solid #223444;border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.6);font:12px/1.35 Inter,Barlow,system-ui,sans-serif}
+      #pdk-root .pdk-pick *{box-sizing:border-box}
+      #pdk-root .pdk-pick-h{display:flex;align-items:center;gap:10px;padding:10px 10px 10px 14px;border-bottom:1px solid var(--line)}
+      #pdk-root .pdk-pick-h > b{font-size:14px;font-weight:800;color:var(--tx)}
+      #pdk-root .pdk-pick .pdk-tier{padding:2px 8px;border:none;border-radius:5px;background:var(--row2);color:var(--tx);font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+      #pdk-root .pdk-dim{font-size:11px;color:var(--dim)}
+      #pdk-root .pdk-timer{color:var(--tx);font-variant-numeric:tabular-nums}
+      #pdk-root .pdk-x{margin-left:auto;width:26px;height:26px;padding:0;background:transparent;border:none;border-radius:6px;color:#b9c8d6;font-size:14px;cursor:pointer}
+      #pdk-root .pdk-x:hover{background:var(--row2);color:#fff}
+
+      #pdk-root .pdk-rw{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:10px 14px;border-bottom:1px solid var(--line)}
+      #pdk-root .pdk-rw > span{margin-right:4px;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+      #pdk-root .pdk-rw em{padding:3px 8px;border-radius:6px;background:var(--row);font-style:normal;font-size:11px}
+      #pdk-root .pdk-rw em.xp{color:var(--xp);font-weight:700}
+      #pdk-root .pdk-pick .pdk-rws{gap:6px}
+      #pdk-root .pdk-pick .pdk-rwi{gap:6px;padding:3px 9px 3px 5px;border-radius:7px;background:var(--row);border:1px solid var(--line);font-size:11.5px;color:var(--tx)}
+      #pdk-root .pdk-pick .pdk-rwi img{width:20px;height:20px}
+      #pdk-root .pdk-pick .pdk-rwi b{color:var(--tx)}
+
+      #pdk-root .pdk-opts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:14px}
+      #pdk-root .pdk-opt{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;padding:0 0 12px;background:var(--row);border:1px solid var(--line);border-radius:10px;text-align:center;overflow:hidden;transition:border-color .12s}
+      #pdk-root .pdk-opt:hover{border-color:#2c4658}
+      #pdk-root .pdk-opt.on{border-color:var(--ok)}
+      #pdk-root .pdk-opt.off{opacity:.45}
+      #pdk-root .pdk-opt .pdk-star{position:absolute;top:8px;left:10px;color:var(--ok);font-style:normal}
+      #pdk-root .pdk-eff{position:absolute;top:8px;right:8px;z-index:1;padding:2px 7px;border-radius:6px;font-size:11px;font-weight:800;color:var(--dim);background:var(--row2)}
+      #pdk-root .pdk-eff.good{color:#08210f;background:var(--ok)}
+      #pdk-root .pdk-eff.bad{color:#fff;background:#ef6a6a}
+      #pdk-root .pdk-osp{display:grid;place-items:center;width:100%;height:140px;background:radial-gradient(circle at 50% 60%,#18283a 0,transparent 70%)}
+      #pdk-root .pdk-osp img{height:112px;width:auto;max-width:90%;object-fit:contain;image-rendering:pixelated}
+      #pdk-root .pdk-oname{font-size:14px;font-weight:800;color:var(--tx);padding:0 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+      #pdk-root .pdk-pick .pdk-types{gap:4px}
+      #pdk-root .pdk-pick .pdk-type{padding:1px 7px;border-radius:4px;font-size:9.5px;font-weight:700;text-transform:none}
+      #pdk-root .pdk-ostats{display:grid;grid-template-columns:1fr 1fr;width:calc(100% - 20px);margin-top:4px;border-top:1px solid var(--line);padding-top:8px}
+      #pdk-root .pdk-ostats div{display:flex;flex-direction:column;gap:1px}
+      #pdk-root .pdk-ostats div + div{border-left:1px solid var(--line)}
+      #pdk-root .pdk-ostats small{font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+      #pdk-root .pdk-ostats b{font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--tx)}
+      #pdk-root .pdk-ostats b.xp{color:var(--xp)}
+      #pdk-root .pdk-obar{width:calc(100% - 20px);height:4px;margin:2px 0;background:var(--row2);border-radius:2px;overflow:hidden}
+      #pdk-root .pdk-obar i{display:block;height:100%;background:var(--ok);border-radius:2px}
+      #pdk-root .pdk-ostate{font-size:10.5px;color:var(--dim)}
+      #pdk-root .pdk-go{width:calc(100% - 20px);height:30px;margin-top:4px;background:transparent;border:1px solid #2c4658;border-radius:7px;color:var(--tx);font:inherit;font-weight:700;cursor:pointer;transition:background .12s,border-color .12s}
+      #pdk-root .pdk-go:hover{background:#e3eaf1;border-color:#e3eaf1;color:#0c141b}
+      #pdk-root .pdk-go.arm,#pdk-root .pdk-rrbtn.arm{background:var(--ok);border-color:var(--ok);color:#08210f}
+
+      #pdk-root .pdk-rr{display:flex;align-items:center;gap:12px;margin:0 14px 12px;padding:8px 10px 8px 12px;border:1px solid var(--line);border-radius:9px;background:var(--row)}
+      #pdk-root .pdk-rr > div{flex:1;min-width:0}
+      #pdk-root .pdk-rr b{font-size:12px;color:var(--tx)}
+      #pdk-root .pdk-rr small{display:block;font-size:10.5px;color:var(--dim)}
+      #pdk-root .pdk-rrhave{flex:none;font-size:10.5px;color:var(--dim)}
+      #pdk-root .pdk-rrbtn{flex:none;height:28px;padding:0 10px;border-radius:7px;border:1px solid #2c4658;background:transparent;color:var(--tx);font:inherit;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px}
+      #pdk-root .pdk-rrbtn:hover:not([disabled]){background:var(--row2)}
+      #pdk-root .pdk-rrbtn[disabled]{opacity:.4;cursor:not-allowed}
+      #pdk-root .pdk-rrbtn span{font-size:11px;color:var(--dim)}
+      #pdk-root .pdk-foot{margin:0;padding:0 14px 12px;text-align:center;font-size:10.5px;color:#5c7082}
+    `;
+
+    const addCss = () => {
+      const st = document.createElement('style');
+
+      st.textContent = CSS + 'html.pdk-silent .map-window{visibility:hidden!important}';
+      document.head.appendChild(st);
+    };
+
+    /* ---------- DAILY KILL ---------- */
+    const dk = { raw: null, t: 0, open: false, busy: false };
+
+    const dkNum = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+
+    // Formato real de /api/game/daily-kill:
+    // { tierLabel, resetAt, options:[{xp,qty,name,speciesId,type1,type2,have,done}], pickedIdx, claimed,
+    //   reward:{xp, items:[{name,qty,icon}]}, rerollCost, cards, rerolls, rerollMax, locked, minLevel }
+    function dkParse(d) {
+      if (!d || typeof d !== 'object' || !Array.isArray(d.options)) return null;
+
+      const picked = Number.isInteger(d.pickedIdx) ? d.pickedIdx : -1;
+
+      const opts = d.options.map((o, i) => ({
+        i,
+        sid: dkNum(o.speciesId),
+        name: o.name || '#' + o.speciesId,
+        types: [o.type1, o.type2].filter(Boolean),
+        xp: dkNum(o.xp),
+        kills: dkNum(o.have) || 0,
+        need: dkNum(o.qty),
+        done: !!o.done,
+        chosen: i === picked,
+        raw: o
+      }));
+
+      const ch = opts[picked] || null;
+      const rw = d.reward || {};
+
+      return {
+        tier: d.tierLabel || d.tierKey || '',
+        xp: dkNum(rw.xp) || null,
+        done: !!(ch && ch.done),
+        claimed: !!d.claimed,
+        canClaim: !!(ch && ch.need && ch.kills >= ch.need && !d.claimed),
+        reroll: d.resetAt,
+        rewards: (Array.isArray(rw.items) ? rw.items : []).map((r) => ({ name: r.name || '', qty: dkNum(r.qty), icon: r.icon || '' })),
+        rerollCost: dkNum(d.rerollCost),
+        cards: dkNum(d.cards) || 0,
+        locked: !!d.locked,
+        minLevel: dkNum(d.minLevel),
+        opts,
+        chosen: ch
+      };
+    }
+
+    function dkSet(d) {
+      if (d && Array.isArray(d.options)) store.set('last', d);
+
+      dk.raw = d;
+      dk.t = Date.now();
+      dk.st = dkParse(d);
+      dkRender();
+    }
+
+    async function dkLoad() {
+      try {
+        dkSet(await gameGet('/api/game/daily-kill'));
+      } catch (e) {
+        dk.err = String((e && e.message) || e);
+        dkRender();
+      }
+    }
+
+    function dkKill(j) {
+      const c = dk.st && dk.st.chosen;
+
+      if (!c || !j || +j.speciesId !== c.sid) return;
+
+      c.kills = (c.kills || 0) + 1;
+      dkRender();
+
+      if (c.need && c.kills >= c.need) setTimeout(dkLoad, 1500);
+    }
+
+    // nome → pokeId (para formas especiais, ex.: "Trickmaster Gengar" usa o sprite do Gengar)
+    const baseIds = new Map();
+    const typesById = new Map();
+
+    NF('/game/creatures.json')
+      .then((r) => r.json())
+      .then((c) => {
+        (c.creatures || c || []).forEach((x) => {
+          if (!x) return;
+          if (x.name) baseIds.set(String(x.name).toLowerCase(), +x.pokeId);
+          if (x.pokeId != null) typesById.set(+x.pokeId, [x.type1, x.type2].filter(Boolean).map((t) => String(t).toLowerCase()));
+        });
+        loadLeader();
+        dkRender();
+      })
+      .catch(() => {});
+
+    /* ---------- efetividade contra o Pokémon que você está usando ---------- */
+    const CHART = {
+      normal: { rock: 0.5, ghost: 0, steel: 0.5 },
+      fire: { fire: 0.5, water: 0.5, grass: 2, ice: 2, bug: 2, rock: 0.5, dragon: 0.5, steel: 2 },
+      water: { fire: 2, water: 0.5, grass: 0.5, ground: 2, rock: 2, dragon: 0.5 },
+      electric: { water: 2, electric: 0.5, grass: 0.5, ground: 0, flying: 2, dragon: 0.5 },
+      grass: { fire: 0.5, water: 2, grass: 0.5, poison: 0.5, ground: 2, flying: 0.5, bug: 0.5, rock: 2, dragon: 0.5, steel: 0.5 },
+      ice: { fire: 0.5, water: 0.5, grass: 2, ice: 0.5, ground: 2, flying: 2, dragon: 2, steel: 0.5 },
+      fighting: { normal: 2, ice: 2, poison: 0.5, flying: 0.5, psychic: 0.5, bug: 0.5, rock: 2, ghost: 0, dark: 2, steel: 2, fairy: 0.5 },
+      poison: { grass: 2, poison: 0.5, ground: 0.5, rock: 0.5, ghost: 0.5, steel: 0, fairy: 2 },
+      ground: { fire: 2, electric: 2, grass: 0.5, poison: 2, flying: 0, bug: 0.5, rock: 2, steel: 2 },
+      flying: { electric: 0.5, grass: 2, fighting: 2, bug: 2, rock: 0.5, steel: 0.5 },
+      psychic: { fighting: 2, poison: 2, psychic: 0.5, dark: 0, steel: 0.5 },
+      bug: { fire: 0.5, grass: 2, fighting: 0.5, poison: 0.5, flying: 0.5, psychic: 2, ghost: 0.5, dark: 2, steel: 0.5, fairy: 0.5 },
+      rock: { fire: 2, ice: 2, fighting: 0.5, ground: 0.5, flying: 2, bug: 2, steel: 0.5 },
+      ghost: { normal: 0, psychic: 2, ghost: 2, dark: 0.5 },
+      dragon: { dragon: 2, steel: 0.5, fairy: 0 },
+      dark: { fighting: 0.5, psychic: 2, ghost: 2, dark: 0.5, fairy: 0.5 },
+      steel: { fire: 0.5, water: 0.5, electric: 0.5, ice: 2, rock: 2, steel: 0.5, fairy: 2 },
+      fairy: { fire: 0.5, fighting: 2, poison: 0.5, dragon: 2, dark: 2, steel: 0.5 }
+    };
+    // escala usada no jogo (a mesma da coluna "Vant." da janela de Hunts)
+    const effLabel = (m) => (m === 1.5 ? 1.75 : m === 2 ? 2.5 : m >= 4 ? 5.5 : m === 0.5 ? 0.33 : m);
+    let leader = null;
+
+    function effOf(def) {
+      const atk = leader && leader.types;
+
+      if (!atk || !atk.length || !def.length) return null;
+
+      let best = null;
+
+      atk.forEach((a) => {
+        let m = 1;
+
+        def.forEach((d) => {
+          const v = CHART[a] && CHART[a][String(d).toLowerCase()];
+
+          if (v !== undefined) m *= v;
+        });
+
+        if (best === null || m > best) best = m;
+      });
+
+      return best;
+    }
+
+    function gameCtx() {
+      const el = document.querySelector('.phud-name') || document.querySelector('.phud');
+      const fk = el && Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
+      let f = fk ? el[fk] : null;
+
+      for (let i = 0; f && i < 40; i++, f = f.return) {
+        const v = f.memoizedProps && f.memoizedProps.value;
+
+        if (v && typeof v.subscribe === 'function' && typeof v.requestPokes === 'function') return v;
+      }
+
+      return null;
+    }
+
+    function loadLeader() {
+      const ctx = gameCtx();
+
+      if (!ctx) return;
+
+      let done = false;
+      let un = null;
+      const fin = (list) => {
+        if (done) return;
+
+        done = true;
+
+        try {
+          un && un();
+        } catch (e) {}
+
+        const L = Array.isArray(list) ? list : [];
+        const p = L.find((x) => x.leader) || L.filter((x) => x.team).sort((a, b) => (a.slot ?? 99) - (b.slot ?? 99))[0];
+
+        if (!p) return;
+
+        let types = [p.type1, p.type2].filter(Boolean).map((t) => String(t).toLowerCase());
+
+        if (!types.length) types = typesById.get(+p.speciesId) || [];
+
+        leader = { name: p.name || '', types };
+        dkRender();
+      };
+
+      setTimeout(() => fin([]), 2500);
+      un = ctx.subscribe('pokes', (m) => fin(m && m.list));
+      ctx.requestPokes();
+    }
+
+    setInterval(loadLeader, 60000);
+
+    const dkBaseId = (sid) => {
+      const o = dk.st && dk.st.opts.find((x) => x.sid === +sid);
+      const w = o ? String(o.name).toLowerCase().split(' ') : [];
+
+      for (let i = 1; i < w.length; i++) {
+        const id = baseIds.get(w.slice(i).join(' '));
+
+        if (id > 0 && id <= 1025) return id;
+      }
+
+      return 0;
+    };
+
+    const dkSprite = (sid) => {
+      let id = +sid || 0;
+
+      if (id >= 13000 && id < 14000) id -= 13000;
+      if (id > 1025) id = dkBaseId(sid);
+      if (!id || id > 1025) return {};
+
+      const base = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon';
+
+      return { anim: base + '/versions/generation-v/black-white/animated/' + id + '.gif', still: base + '/' + id + '.png' };
+    };
+
+    const dkImg = (sid) => {
+      const sp = dkSprite(sid);
+
+      return sp.anim ? `<img src="${esc(sp.anim)}" data-fb="${esc(sp.still || '')}" onerror="if(this.dataset.fb){this.src=this.dataset.fb;this.dataset.fb=''}else{this.remove()}">` : '';
+    };
+
+    const dkBadge = (t) => {
+      const k = String(t).toLowerCase();
+      const bg = TYPE_COLOR[k] || '#6b7089';
+
+      return `<span class="pdk-type" style="background:${bg};color:${rpTextOn(bg)}">${esc(RP_TYPE_PT[k] || cap(k))}</span>`;
+    };
+
+    function dkTimeLeft() {
+      const r = dk.st && dk.st.reroll;
+      const t = typeof r === 'number' ? (r < 1e12 ? r * 1000 : r) : r ? Date.parse(r) : NaN;
+
+      if (!Number.isFinite(t)) return '';
+
+      const s = Math.max(0, Math.round((t - Date.now()) / 1000));
+
+      return String(Math.floor(s / 3600)).padStart(2, '0') + ':' + String(Math.floor((s % 3600) / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+    }
+
+    const dkRewards = (st, small) =>
+      st.rewards.length
+        ? `<div class="pdk-rws${small ? ' sm' : ''}">${st.rewards
+            .map(
+              (r) =>
+                `<span class="pdk-rwi" title="${esc(r.name)}">${r.icon ? `<img src="${esc(iconUrl(r.icon))}" onerror="this.remove()">` : ''}<b>×${fmt(r.qty || 1)}</b>${small ? '' : ' ' + esc(r.name)}</span>`
+            )
+            .join('')}</div>`
+        : '';
+
+    function dkRender() {
+      let el = document.getElementById('pdk-root');
+
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'pdk-root';
+        document.body.appendChild(el);
+        el.addEventListener('click', dkClick);
+      }
+
+      const st = dk.st;
+
+      if (!st) {
+        el.innerHTML = '';
+        el.style.display = 'none';
+        return;
+      }
+
+      el.style.display = '';
+
+      const c = st.chosen;
+      const need = c && c.need != null ? c.need : null;
+      const kills = c ? c.kills || 0 : 0;
+      const pct = need ? Math.min(100, (kills / need) * 100) : 0;
+      const full = !!(c && need && kills >= need);
+      const doneToday = !!(st.claimed || (st.done && !full));
+      const mini = true;
+      const xp = (c && c.xp) || st.xp;
+
+      const head = `<div class="pdk-hd">
+          ${st.tier ? `<span class="pdk-tier">${esc(st.tier)}</span>` : '<span></span>'}
+          <span class="pdk-hd-r">${c ? '<i class="pdk-star">★</i>' : ''}</span>
+        </div>`;
+
+      let card;
+
+      if (doneToday) {
+        card = `<div class="pdk-card pdk-mini pdk-over" data-dk="open">
+          <div class="pdk-mrow">
+            <div class="pdk-msp pdk-ok">✓</div>
+            <div class="pdk-minfo">
+              <b>Daily Kill concluída</b>
+              <span>${dkTimeLeft() ? 'libera em <em class="pdk-timer">' + dkTimeLeft() + '</em>' : 'volta amanhã'}</span>
+            </div>
+          </div>
+        </div>`;
+      } else if (mini) {
+        const rr = dkTimeLeft() ? ` · <span class="pdk-mt">reroll <b class="pdk-timer">${dkTimeLeft()}</b></span>` : '';
+
+        card = `<div class="pdk-card pdk-mini${c ? '' : ' pdk-q'}${full ? ' pdk-full' : ''}" data-dk="open" title="Daily Kill">
+          <div class="pdk-mrow">
+            <div class="pdk-msp">${c ? dkImg(c.sid) || '❔' : '<b>?</b>'}</div>
+            <div class="pdk-minfo">
+              <b>${c ? esc(c.name) : 'Daily Kill disponível'}</b>
+              ${
+                c
+                  ? `<span><em>${fmt(kills)}</em> / ${need != null ? fmt(need) : '?'} kills${full && !st.claimed ? ' · <b class="pdk-rdy">pronto para resgatar</b>' : ''}${rr}</span><div class="pdk-bar"><i style="width:${pct}%"></i></div>`
+                  : `<span>clique para escolher${rr}</span>`
+              }
+            </div>
+            ${c && !full ? `<button type="button" class="pdk-tp" data-dk="tp" title="Ir para a hunt de ${esc(c.name)}"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg></button>` : ''}
+          </div>
+        </div>`;
+      } else if (c) {
+        card = `<div class="pdk-card${full ? ' pdk-full' : ''}" data-dk="open">
+          ${head}
+          <div class="pdk-sp">${dkImg(c.sid) || '❔'}</div>
+          <small class="pdk-num">#${String(c.sid || '').padStart(3, '0')}</small>
+          <b class="pdk-name">${esc(c.name)}</b>
+          <div class="pdk-types">${c.types.map(dkBadge).join('')}</div>
+          ${xp ? `<div class="pdk-xp">✦ ${fmt(xp)} XP</div>` : ''}
+          <div class="pdk-cnt"><em>${fmt(kills)}</em> / ${need != null ? fmt(need) : '?'}</div>
+          <div class="pdk-bar"><i style="width:${pct}%"></i></div>
+          ${
+            full && !st.claimed
+              ? '<button type="button" class="pdk-btn go" data-dk="claim">Resgatar</button>'
+              : st.claimed
+                ? '<div class="pdk-btn done">Concluída ✓</div>'
+                : `<div class="pdk-btn">Faltam ${need != null ? fmt(Math.max(0, need - kills)) : '?'}</div>`
+          }
+          <button type="button" class="pdk-mbtn" data-dk="mini">Minimizar</button>
+        </div>`;
+      } else {
+        card = `<div class="pdk-card pdk-q" data-dk="open">
+          ${head}
+          <div class="pdk-sp pdk-qbox"><b>?</b></div>
+          <b class="pdk-name">Daily Kill disponível</b>
+          <small class="pdk-hint">${st.claimed ? 'Missão de hoje concluída ✓' : 'Clique para escolher o alvo de hoje'}</small>
+          ${st.xp ? `<div class="pdk-xp">✦ ${fmt(st.xp)} XP</div>` : ''}
+          <button type="button" class="pdk-mbtn" data-dk="mini">Minimizar</button>
+        </div>`;
+      }
+
+      el.innerHTML = card + (dk.open ? dkPicker(st) : '');
+    }
+
+    function dkPicker(st) {
+      const xpAll = st.xp || (st.chosen && st.chosen.xp);
+
+      return `<div class="pdk-pick">
+        <div class="pdk-pick-h">
+          <b>Daily Kill</b>
+          ${st.tier ? `<span class="pdk-tier">${esc(st.tier)}</span>` : ''}
+          ${dkTimeLeft() ? `<span class="pdk-dim">reroll em <b class="pdk-timer">${dkTimeLeft()}</b></span>` : ''}
+          <button type="button" class="pdk-x" data-dk="close" title="Fechar">✕</button>
+        </div>
+        <div class="pdk-rw"><span>Recompensa</span>${xpAll ? `<em class="xp">${fmt(xpAll)} XP</em>` : ''}${dkRewards(st, false) || '<em class="pdk-dim">—</em>'}</div>
+        <div class="pdk-opts">${
+          st.opts
+            .map(
+              (o) => `<div class="pdk-opt${o.chosen ? ' on' : ''}${st.chosen && !o.chosen ? ' off' : ''}">
+              ${o.chosen ? '<span class="pdk-star">✓</span>' : ''}
+              ${(() => {
+                const e = effOf(o.types);
+
+                return e == null ? '' : `<span class="pdk-eff ${e > 1 ? 'good' : e < 1 ? 'bad' : ''}" title="Vantagem do seu ${esc(leader.name)}">${effLabel(e)}x</span>`;
+              })()}
+              <div class="pdk-osp">${dkImg(o.sid) || '<b class="pdk-dim">?</b>'}</div>
+              <b class="pdk-oname" title="${esc(o.name)}">${esc(o.name)}</b>
+              <div class="pdk-types">${o.types.map(dkBadge).join('')}</div>
+              <div class="pdk-ostats">
+                <div><small>XP</small><b class="xp">${o.xp ? fmt(o.xp) : '—'}</b></div>
+                <div><small>Kills</small><b>${fmt(o.kills || 0)} / ${o.need != null ? fmt(o.need) : '?'}</b></div>
+              </div>
+              ${
+                st.chosen
+                  ? o.chosen
+                    ? `<div class="pdk-obar"><i style="width:${o.need ? Math.min(100, (o.kills / o.need) * 100) : 0}%"></i></div><span class="pdk-ostate">${
+                        o.need && o.kills >= o.need ? 'completo!' : 'faltam ' + fmt(Math.max(0, (o.need || 0) - (o.kills || 0)))
+                      }</span>`
+                    : '<span class="pdk-ostate">não escolhida</span>'
+                  : `<button type="button" class="pdk-go${dk.arm === 'choose:' + o.i ? ' arm' : ''}" data-dk="choose" data-i="${o.i}">${dk.arm === 'choose:' + o.i ? 'Confirmar?' : 'Escolher'}</button>`
+              }
+            </div>`
+            )
+            .join('') || '<div class="pdk-dim">Sem opções hoje.</div>'
+        }</div>
+        ${
+          !st.chosen && st.rerollCost != null
+            ? `<div class="pdk-rr">
+                <div><b>Não gostou das opções?</b><small>Sorteia outros 3 — só antes de escolher.</small></div>
+                <span class="pdk-rrhave">${fmt(st.cards)} na mochila</span>
+                <button type="button" class="pdk-rrbtn${dk.arm === 'reroll' ? ' arm' : ''}" data-dk="reroll"${st.cards >= st.rerollCost ? '' : ' disabled'}>${dk.arm === 'reroll' ? 'Confirmar?' : 'Trocar os 3'} <span>×${fmt(st.rerollCost)}</span></button>
+              </div>`
+            : ''
+        }
+        <div class="pdk-foot">A escolha vale o dia inteiro.</div>
+      </div>`;
+    }
+
+    async function dkAction(kind, o) {
+      const lt = store.get(kind, null) || DK_LS_STORE.get(kind, null);
+      let url;
+      let body;
+
+      if (lt) {
+        url = lt.url;
+
+        try {
+          body = lt.body ? JSON.parse(lt.body) : {};
+        } catch (e) {
+          body = {};
+        }
+
+        if (o) {
+          ['speciesId', 'pokeId', 'targetSpeciesId'].forEach((k) => k in body && (body[k] = o.sid));
+          ['index', 'choice', 'idx', 'slot', 'option'].forEach((k) => k in body && (body[k] = o.i));
+        }
+      } else {
+        url = '/api/game/daily-kill/' + (kind === 'dkClaim' ? 'claim' : kind === 'dkReroll' ? 'reroll' : 'pick');
+        body = o ? { idx: o.i, index: o.i, speciesId: o.sid } : {};
+      }
+
+      return gamePost(url, body);
+    }
+
+    function dkClick(e) {
+      const b = e.target.closest('[data-dk]');
+
+      if (!b || dk.busy) return;
+
+      const k = b.dataset.dk;
+
+      e.stopPropagation();
+
+      if (k === 'open') {
+        dk.open = !dk.open;
+        dkRender();
+
+        if (dk.open) {
+          dkLoad();
+          loadLeader();
+        }
+
+        return;
+      }
+
+      if (k === 'tp') {
+        const c = dk.st && dk.st.chosen;
+
+        if (c) {
+          b.classList.add('busy');
+          goHunt(c).finally(() => b.classList.remove('busy'));
+        }
+
+        return;
+      }
+
+      if (k === 'close') {
+        dk.open = false;
+        dkRender();
+        return;
+      }
+
+      if (k === 'mini') {
+        const toMini = !store.get('dkMini', false);
+
+        store.set('dkMini', toMini);
+
+        if (toMini) dk.open = false;
+
+        dkRender();
+        return;
+      }
+
+      if (k === 'choose' || k === 'claim' || k === 'reroll') {
+        const o = k === 'choose' ? (dk.st.opts || [])[+b.dataset.i] : null;
+        const kind = k === 'choose' ? 'dkChoose' : k === 'claim' ? 'dkClaim' : 'dkReroll';
+
+        // Escolher/Trocar: 1º clique vira "Confirmar?" no próprio botão (3s); 2º clique executa.
+        if (k !== 'claim') {
+          const armKey = k === 'choose' ? 'choose:' + b.dataset.i : 'reroll';
+
+          if (dk.arm !== armKey) {
+            dk.arm = armKey;
+            clearTimeout(dk.armT);
+            dk.armT = setTimeout(() => {
+              dk.arm = null;
+              dkRender();
+            }, 3000);
+            dkRender();
+
+            return;
+          }
+
+          dk.arm = null;
+          clearTimeout(dk.armT);
+        }
+
+        dk.busy = true;
+        b.disabled = true;
+        dkAction(kind, o)
+          .then((r) => {
+            toast(k === 'choose' ? 'Daily Kill: ' + (o && o.name) + ' escolhido!' : k === 'claim' ? 'Daily Kill resgatado!' : 'Daily Kill: novas opções sorteadas!');
+
+            if (r && typeof r === 'object' && Array.isArray(r.options)) dkSet(r);
+            else dkLoad();
+          })
+          .catch((err) =>
+            toast(
+              'Daily Kill: ' +
+                ((err && err.message) || err) +
+                (store.get(kind, null) || DK_LS_STORE.get(kind, null) ? '' : ' — faça isso 1x pela janela do jogo para eu aprender.')
+            )
+          )
+          .finally(() => {
+            dk.busy = false;
+          });
+      }
+    }
+
+    setInterval(dkLoad, 120000);
+    setInterval(() => {
+      const t = dkTimeLeft();
+
+      document.querySelectorAll('#pdk-root .pdk-timer').forEach((el) => (el.textContent = t));
+    }, 1000);
+
+    /* ---------- ir para a hunt do alvo (pelo mapa do próprio jogo) ---------- */
+    let markersP = null;
+
+    const loadMarkers = () =>
+      markersP ||
+      (markersP = NF('/api/game/map-markers', { credentials: 'same-origin' })
+        .then((r) => r.json())
+        .then((j) => (j && j.hunts) || [])
+        .catch(() => {
+          markersP = null;
+
+          return [];
+        }));
+
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const mapOpen = () => {
+      const w = document.querySelector('.map-window');
+
+      return !!(w && w.getClientRects().length);
+    };
+    const waitFor = async (fn, ms) => {
+      for (let t = 0; t < ms; t += 50) {
+        const v = fn();
+
+        if (v) return v;
+
+        await sleep(50);
+      }
+
+      return null;
+    };
+    // Alt+clique: o script de Hunts deixa passar e o mapa original do jogo abre.
+    const clickDockMap = () => {
+      const b = document.querySelector('[data-guide="dock-map"]');
+
+      if (b) b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, altKey: true }));
+    };
+
+    async function goHunt(c) {
+      const hunts = await loadMarkers();
+      const nm = String(c.name).toLowerCase();
+      const look = c.raw && +c.raw.looktype;
+      const h = hunts.find((x) => String(x.name).toLowerCase() === nm) || hunts.find((x) => look && +x.looktype === look && +x.level > 0);
+
+      if (!h) {
+        toast('Não achei a hunt de ' + c.name + ' no mapa.');
+
+        return;
+      }
+
+      const sel = '[data-guide="hunt-' + String(h.slug).replace(/"/g, '') + '"]';
+      const wasOpen = mapOpen();
+
+      document.documentElement.classList.add('pdk-silent');
 
       try {
-        body = lt.body ? JSON.parse(lt.body) : {};
+        if (!wasOpen) {
+          clickDockMap();
+
+          if (!(await waitFor(mapOpen, 2000))) throw new Error('mapa não abriu');
+        }
+
+        let mk = document.querySelector(sel);
+
+        if (!mk) {
+          const plates = [...document.querySelectorAll('.map-window .map-plate, .map-window .map-area')];
+          const plate = plates[['kanto', 'outland', 'orre', 'nightmare'].indexOf(h.area)];
+
+          if (plate && !plate.classList.contains('locked')) plate.click();
+
+          mk = await waitFor(() => document.querySelector(sel), 2500);
+        }
+
+        if (!mk) throw new Error('hunt bloqueada ou fora do mapa');
+
+        mk.click();
+        await sleep(250);
       } catch (e) {
-        body = {};
+        toast('Não consegui ir para ' + h.name + ': ' + e.message);
+      } finally {
+        if (!wasOpen && mapOpen()) {
+          const w = document.querySelector('.map-window');
+          const x = [...w.querySelectorAll('button')].find((b) => /^[×✕x]$/i.test(b.textContent.trim()) || /close|fechar/i.test(b.className + ' ' + (b.title || '')));
+
+          x ? x.click() : clickDockMap();
+        }
+
+        document.documentElement.classList.remove('pdk-silent');
       }
-
-      if (o) {
-        ['speciesId', 'pokeId', 'targetSpeciesId'].forEach((k) => k in body && (body[k] = o.sid));
-        ['index', 'choice', 'idx', 'slot', 'option'].forEach((k) => k in body && (body[k] = o.i));
-      }
-    } else {
-      url = '/api/game/daily-kill/' + (kind === 'dkClaim' ? 'claim' : 'choose');
-      body = o ? { speciesId: o.sid, index: o.i } : {};
     }
 
-    return gamePost(url, body);
-  }
+    /* ---------- início ---------- */
+    const boot = () => {
+      addCss();
 
-  function dkClick(e) {
-    const b = e.target.closest('[data-dk]');
+      // mostra na hora o último estado conhecido e busca o atual assim que a sessão existir
+      const last = store.get('last', null);
 
-    if (!b || dk.busy) return;
+      if (last) dkSet(last);
 
-    const k = b.dataset.dk;
+      const iv = setInterval(() => {
+        if (!(tokens() && tokens().accessToken)) return;
 
-    e.stopPropagation();
+        clearInterval(iv);
+        dkLoad();
+      }, 300);
+    };
 
-    if (k === 'open') {
-      dk.open = !dk.open;
-      dkRender();
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+    else boot();
 
-      if (dk.open) dkLoad();
+    DKX.load = dkLoad;
+    DKX.set = dkSet;
+    DKX.kill = dkKill;
 
-      return;
-    }
-
-    if (k === 'close') {
-      dk.open = false;
-      dkRender();
-      return;
-    }
-
-    if (k === 'mini') {
-      const toMini = !store.get('dkMini', false);
-
-      store.set('dkMini', toMini);
-
-      if (toMini) dk.open = false;
-
-      dkRender();
-      return;
-    }
-
-    if (k === 'choose' || k === 'claim') {
-      const o = k === 'choose' ? (dk.st.opts || [])[+b.dataset.i] : null;
-
-      if (k === 'choose' && !confirm('Escolher ' + (o && o.name) + ' como alvo de hoje? A escolha vale o dia inteiro.')) return;
-
-      dk.busy = true;
-      b.disabled = true;
-      dkAction(k === 'choose' ? 'dkChoose' : 'dkClaim', o)
-        .then((r) => {
-          toast(k === 'choose' ? 'Daily Kill: ' + (o && o.name) + ' escolhido!' : 'Daily Kill resgatado!');
-
-          if (r && typeof r === 'object' && dkFindArr(r, 0)) dkSet(r);
-          else dkLoad();
-        })
-        .catch((err) =>
-          toast(
-            'Daily Kill: ' +
-              ((err && err.message) || err) +
-              (store.get(k === 'choose' ? 'dkChoose' : 'dkClaim', null) ? '' : ' — faça isso 1x pela janela do jogo para eu aprender.')
-          )
-        )
-        .finally(() => {
-          dk.busy = false;
-        });
-    }
-  }
-
-  setTimeout(dkLoad, 5000);
-  setInterval(dkLoad, 120000);
-  setInterval(() => {
-    const tl = document.querySelector('#mtal-dk .dk-timer');
-
-    if (tl) tl.textContent = dkTimeLeft();
-  }, 1000);
+    PW.DailyKill = {
+      dump() {
+        gameGet('/api/game/daily-kill').then((d) => console.log(JSON.stringify(d, null, 1)));
+      },
+      state: () => dk
+    };
+  })();
 
   PW.MarketAlerts = {
     dk() {
@@ -11817,4 +12393,2292 @@
     'pronto. Alertas salvos:',
     state.alerts.length
   );
+
+  /* ==================== HUNTS + MENU + VISUAL (antigo 'Poke Idle - Hunts') ==================== */
+
+  (() => {
+
+    const AREAS = [
+      ['kanto', 'Kanto'],
+      ['outland', 'Outland'],
+      ['orre', 'Orre'],
+      ['nightmare', 'Nightmare']
+    ];
+    const SPR = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon';
+
+    const TYPES = {
+      normal: ['Normal', '#9fa19f'],
+      fire: ['Fogo', '#e62829'],
+      water: ['Água', '#2980ef'],
+      electric: ['Elétrico', '#fac000'],
+      grass: ['Planta', '#3fa129'],
+      ice: ['Gelo', '#3dcef3'],
+      fighting: ['Lutador', '#ff8000'],
+      poison: ['Veneno', '#9141cb'],
+      ground: ['Terra', '#915121'],
+      flying: ['Voador', '#81b9ef'],
+      psychic: ['Psíquico', '#ef4179'],
+      bug: ['Inseto', '#91a119'],
+      rock: ['Pedra', '#afa981'],
+      ghost: ['Fantasma', '#704170'],
+      dragon: ['Dragão', '#5060e1'],
+      dark: ['Sombrio', '#624d4e'],
+      steel: ['Aço', '#60a1b8'],
+      fairy: ['Fada', '#ef70ef']
+    };
+
+    const CHART = {
+      normal: { rock: 0.5, ghost: 0, steel: 0.5 },
+      fire: { fire: 0.5, water: 0.5, grass: 2, ice: 2, bug: 2, rock: 0.5, dragon: 0.5, steel: 2 },
+      water: { fire: 2, water: 0.5, grass: 0.5, ground: 2, rock: 2, dragon: 0.5 },
+      electric: { water: 2, electric: 0.5, grass: 0.5, ground: 0, flying: 2, dragon: 0.5 },
+      grass: { fire: 0.5, water: 2, grass: 0.5, poison: 0.5, ground: 2, flying: 0.5, bug: 0.5, rock: 2, dragon: 0.5, steel: 0.5 },
+      ice: { fire: 0.5, water: 0.5, grass: 2, ice: 0.5, ground: 2, flying: 2, dragon: 2, steel: 0.5 },
+      fighting: { normal: 2, ice: 2, poison: 0.5, flying: 0.5, psychic: 0.5, bug: 0.5, rock: 2, ghost: 0, dark: 2, steel: 2, fairy: 0.5 },
+      poison: { grass: 2, poison: 0.5, ground: 0.5, rock: 0.5, ghost: 0.5, steel: 0, fairy: 2 },
+      ground: { fire: 2, electric: 2, grass: 0.5, poison: 2, flying: 0, bug: 0.5, rock: 2, steel: 2 },
+      flying: { electric: 0.5, grass: 2, fighting: 2, bug: 2, rock: 0.5, steel: 0.5 },
+      psychic: { fighting: 2, poison: 2, psychic: 0.5, dark: 0, steel: 0.5 },
+      bug: { fire: 0.5, grass: 2, fighting: 0.5, poison: 0.5, flying: 0.5, psychic: 2, ghost: 0.5, dark: 2, steel: 0.5, fairy: 0.5 },
+      rock: { fire: 2, ice: 2, fighting: 0.5, ground: 0.5, flying: 2, bug: 2, steel: 0.5 },
+      ghost: { normal: 0, psychic: 2, ghost: 2, dark: 0.5 },
+      dragon: { dragon: 2, steel: 0.5, fairy: 0 },
+      dark: { fighting: 0.5, psychic: 2, ghost: 2, dark: 0.5, fairy: 0.5 },
+      steel: { fire: 0.5, water: 0.5, electric: 0.5, ice: 2, rock: 2, steel: 0.5, fairy: 2 },
+      fairy: { fire: 0.5, fighting: 2, poison: 0.5, dragon: 2, dark: 2, steel: 0.5 }
+    };
+
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const fmt = (n) => Number(n || 0).toLocaleString('pt-BR');
+    const short = (n) =>
+      n >= 1e9
+        ? (n / 1e9).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' bi'
+        : n >= 1e6
+        ? (n / 1e6).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' mi'
+        : fmt(n);
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const norm = (s) =>
+      String(s || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .replace(/\[.*?\]|\(.*?\)/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    // Preferências: memória primeiro; tenta gravar no localStorage e, se ele estiver
+    // cheio (QuotaExceededError), no sessionStorage. Nunca quebra o script.
+    const mem = new Map();
+    const ls = {
+      get(k, d) {
+        if (mem.has(k)) return mem.get(k);
+
+        for (const S of [localStorage, sessionStorage]) {
+          try {
+            const v = S.getItem('hl_' + k);
+
+            if (v != null) {
+              const j = JSON.parse(v);
+
+              mem.set(k, j);
+
+              return j;
+            }
+          } catch (e) {}
+        }
+
+        return d;
+      },
+      set(k, v) {
+        mem.set(k, v);
+
+        const txt = JSON.stringify(v);
+
+        for (const S of [localStorage, sessionStorage]) {
+          try {
+            S.setItem('hl_' + k, txt);
+
+            return;
+          } catch (e) {}
+        }
+      }
+    };
+
+    const st = {
+      area: ls.get('area', 'kanto'),
+      sort: ls.get('sort', { k: 'level', d: 1 }),
+      open: ls.get('open', true),
+      caught: ls.get('caught', ''),
+      favOnly: false,
+      types: new Set(ls.get('types', [])),
+      favs: new Set(ls.get('favs', [])),
+      loot: new Set(),
+      q: '',
+      lo: null,
+      hi: null,
+      going: '',
+      ver: 0
+    };
+
+    const data = {
+      hunts: null,
+      cre: null,
+      items: new Map(),
+      caughtIds: new Set(ls.get('caughtIds', [])),
+      leader: null,
+      lastSlug: ls.get('lastSlug', ''),
+      ver: 0
+    };
+
+    /* ---------- WebSocket do jogo ---------- */
+
+    // Dentro do LiveSearch: usa o WebSocket da página (PW) e, na falta, o socket que o LiveSearch já achou.
+    let sock = null;
+    const GAME_OUT = /"type":"(view|enter-hunt|leave-hunt|boosts-refresh|inv-get|family-get)"/;
+    const WSP = PW.WebSocket.prototype;
+    const oSend = WSP.send;
+
+    WSP.send = function (d) {
+      if (typeof d === 'string' && GAME_OUT.test(d)) {
+        sock = this;
+
+        if (d.includes('"enter-hunt"')) {
+          try {
+            const m = JSON.parse(d);
+
+            if (m.slug) {
+              data.lastSlug = m.slug;
+              ls.set('lastSlug', m.slug);
+              data.ver++;
+            }
+          } catch (e) {}
+        }
+      }
+
+      return oSend.apply(this, arguments);
+    };
+
+    const wsOk = () => {
+      if (!(sock && sock.readyState === 1) && wsSt.sock && wsSt.sock.readyState === 1) sock = wsSt.sock;
+
+      return !!(sock && sock.readyState === 1);
+    };
+
+    const mapVisible = () => {
+      const w = document.querySelector('.map-window');
+
+      return !!(w && w.getClientRects().length);
+    };
+
+    async function waitFor(fn, ms) {
+      for (let t = 0; t < ms; t += 50) {
+        const v = fn();
+
+        if (v) return v;
+
+        await sleep(50);
+      }
+
+      return null;
+    }
+
+    async function viaNativeMap(slug, area) {
+      const sel = '[data-guide="hunt-' + String(slug).replace(/"/g, '') + '"]';
+      const wasOpen = mapVisible();
+
+      document.documentElement.classList.add('hl-silent');
+
+      try {
+        if (!wasOpen) {
+          nativeMap();
+
+          if (!(await waitFor(mapVisible, 2000))) return false;
+        }
+
+        let mk = document.querySelector(sel);
+
+        if (!mk) {
+          const plates = [...document.querySelectorAll('.map-window .map-plate, .map-window .map-area')];
+          const plate = plates[AREAS.findIndex(([k]) => k === area)];
+
+          if (plate && !plate.classList.contains('locked')) plate.click();
+
+          mk = await waitFor(() => document.querySelector(sel), 2500);
+        }
+
+        if (!mk) return false;
+
+        mk.click();
+        await sleep(250);
+
+        return true;
+      } finally {
+        if (!wasOpen && mapVisible()) {
+          const w = document.querySelector('.map-window');
+          const x = [...w.querySelectorAll('button')].find((b) => /^[×✕x]$/i.test(b.textContent.trim()) || /close|fechar/i.test(b.className + ' ' + (b.title || '')));
+
+          x ? x.click() : nativeMap();
+        }
+
+        document.documentElement.classList.remove('hl-silent');
+      }
+    }
+
+    async function arrived(h) {
+      return !!(await waitFor(() => hud().loc === norm(h.name), 4000));
+    }
+
+    async function travel(slug) {
+      const h = data.hunts && data.hunts.find((x) => x.slug === slug);
+
+      if (!h) return;
+
+      const here = hereHunt(hud().loc);
+
+      if (here && here.slug === slug) {
+        toast('Você já está em ' + here.name + '.');
+
+        return;
+      }
+
+      st.going = slug;
+      st.ver++;
+      render();
+
+      let ok = (await viaNativeMap(slug, h.area)) && (await arrived(h));
+
+      if (!ok && wsOk()) {
+        sock.send(JSON.stringify({ type: 'leave-hunt' }));
+        await sleep(450);
+        sock.send(JSON.stringify({ type: 'enter-hunt', slug }));
+        ok = await arrived(h);
+      }
+
+      if (!ok) toast('Não consegui viajar para ' + h.name + '.');
+
+      st.going = '';
+      st.ver++;
+      render();
+    }
+
+    /* ---------- dados ---------- */
+
+    const tokens = () => {
+      try {
+        return JSON.parse(sessionStorage.getItem('pokeweb:tokens') || 'null');
+      } catch (e) {
+        return null;
+      }
+    };
+
+    async function authGet(url) {
+      const send = (t) => fetch(url, { headers: t ? { Authorization: 'Bearer ' + t } : {} });
+      let r = await send(tokens() && tokens().accessToken);
+
+      if (r.status === 401 && tokens() && tokens().refreshToken) {
+        const rr = await fetch('/api/auth/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken: tokens().refreshToken })
+        });
+
+        if (rr.ok) {
+          const j = await rr.json();
+
+          if (j && j.accessToken) {
+            sessionStorage.setItem('pokeweb:tokens', JSON.stringify(j));
+            r = await send(j.accessToken);
+          }
+        }
+      }
+
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+
+      return r.json();
+    }
+
+    let staticP = null;
+
+    function loadStatic() {
+      if (staticP) return staticP;
+
+      staticP = Promise.all([
+        fetch('/api/game/map-markers', { credentials: 'same-origin' }).then((r) => r.json()),
+        fetch('/game/creatures.json').then((r) => r.json()),
+        fetch('/game/items.json')
+          .then((r) => r.json())
+          .catch(() => null)
+      ])
+        .then(([mm, cr, it]) => {
+          const list = (cr && (cr.creatures || (Array.isArray(cr) ? cr : null))) || [];
+          const byLook = new Map();
+          const byName = new Map();
+          const byId = new Map();
+
+          list.forEach((c) => {
+            if (!c) return;
+            if (c.looktype != null && !byLook.has(+c.looktype)) byLook.set(+c.looktype, c);
+            if (c.name) byName.set(norm(c.name), c);
+            if (c.pokeId != null) byId.set(+c.pokeId, c);
+          });
+
+          data.cre = { byLook, byName, byId };
+
+          const items = (it && (Array.isArray(it) ? it : it.items || Object.values(it))) || [];
+
+          items.forEach((x) => {
+            if (!x || !x.name) return;
+
+            const ic = x.icon || x.image || x.sprite || x.img || '';
+
+            if (ic) data.items.set(norm(x.name), /^(https?:)?\//.test(ic) ? ic : '/assets/items/' + String(ic).replace(/^\/+/, ''));
+          });
+
+          data.hunts = ((mm && mm.hunts) || []).map((m) => {
+            const c = byLook.get(+m.looktype) || byName.get(norm(m.name)) || null;
+            const bst = c ? ['baseHp', 'baseAtk', 'baseDef', 'baseSpAtk', 'baseSpDef', 'baseSpeed'].reduce((a, k) => a + (+c[k] || 0), 0) : 0;
+
+            return {
+              slug: m.slug,
+              name: m.name,
+              level: +m.level || 0,
+              area: m.area,
+              city: !(+m.level > 0),
+              c,
+              types: c ? [c.type1, c.type2].filter(Boolean).map((t) => String(t).toLowerCase()) : [],
+              xp: c ? +c.experience || 0 : 0,
+              total: bst,
+              gold: c ? +(c.sellValue || c.priceNpc) || 0 : 0,
+              pid: c ? spriteId(c, m.name) : 0,
+              shiny: /shiny/i.test(m.name),
+              loot: (c && Array.isArray(c.loot) ? c.loot : []).slice().sort((a, b) => (b.chance || 0) - (a.chance || 0))
+            };
+          });
+
+          data.areaMin = {};
+
+          AREAS.forEach(([a]) => {
+            const lv = data.hunts.filter((h) => h.area === a && !h.city).map((h) => h.level);
+
+            data.areaMin[a] = lv.length ? Math.min(...lv) : 0;
+          });
+
+          data.ver++;
+          render();
+        })
+        .catch((e) => {
+          staticP = null;
+          console.warn('[Hunts] falha ao carregar dados', e);
+        });
+
+      return staticP;
+    }
+
+    function spriteId(c, name) {
+      let id = +c.pokeId || 0;
+
+      if (id >= 13000 && id < 14000) id -= 13000;
+      if (id > 0 && id <= 1025) return id;
+
+      const words = norm(name).split(' ');
+
+      for (let i = 1; i < words.length; i++) {
+        const b = data.cre.byName.get(words.slice(i).join(' '));
+
+        if (b && +b.pokeId > 0 && +b.pokeId <= 1025) return +b.pokeId;
+      }
+
+      return 0;
+    }
+
+    async function loadCaught() {
+      try {
+        const d = await authGet('/api/game/pokedex');
+        const ids = ((d && d.species) || []).filter((s) => s && s.caught).map((s) => +s.id);
+
+        data.caughtIds = new Set(ids);
+        ls.set('caughtIds', ids);
+        data.ver++;
+        render();
+      } catch (e) {}
+    }
+
+    function gameCtx() {
+      const el = document.querySelector('.phud-name') || document.querySelector('.phud');
+      const fk = el && Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
+      let f = fk ? el[fk] : null;
+
+      for (let i = 0; f && i < 40; i++, f = f.return) {
+        const v = f.memoizedProps && f.memoizedProps.value;
+
+        if (v && typeof v.subscribe === 'function' && typeof v.requestPokes === 'function') return v;
+      }
+
+      return null;
+    }
+
+    function loadLeader() {
+      const ctx = gameCtx();
+
+      if (!ctx) return;
+
+      let done = false;
+      let un = null;
+      const fin = (list) => {
+        if (done) return;
+
+        done = true;
+
+        try {
+          un && un();
+        } catch (e) {}
+
+        const L = Array.isArray(list) ? list : [];
+
+        if (L.length) {
+          data.pokes = L;
+          data.ver++;
+        }
+        const p = L.find((x) => x.leader) || L.filter((x) => x.team).sort((a, b) => (a.slot ?? 99) - (b.slot ?? 99))[0];
+
+        if (!p) return;
+
+        let types = [p.type1, p.type2]
+          .concat(Array.isArray(p.types) ? p.types : [])
+          .filter(Boolean)
+          .map((t) => String(t).toLowerCase());
+
+        const c = data.cre ? data.cre.byId.get(+p.speciesId) || data.cre.byName.get(norm(p.name)) : null;
+
+        if (!types.length && c) types = [c.type1, c.type2].filter(Boolean).map((t) => String(t).toLowerCase());
+
+        data.leader = {
+          name: p.name || (c && c.name) || '',
+          types: [...new Set(types)],
+          level: +p.level || 0,
+          pid: c ? spriteId(c, p.name || c.name) : 0,
+          shiny: !!p.shiny
+        };
+        data.ver++;
+        render();
+      };
+
+      setTimeout(() => fin([]), 2500);
+      un = ctx.subscribe('pokes', (m) => fin(m && m.list));
+      ctx.requestPokes();
+    }
+
+    function hud() {
+      const t = document.querySelector('.phud-tloc');
+      const txt = t ? t.textContent : '';
+      let tl = 0;
+
+      for (const s of ['.phud-tlevel', '.phud-level', '[data-guide="player-level"]']) {
+        const el = document.querySelector(s);
+        const m = el && /\d+/.exec(el.textContent);
+
+        if (m) {
+          tl = +m[0];
+          break;
+        }
+      }
+
+      if (!tl) {
+        const m = /n[ií]vel\s*(\d+)/i.exec(txt);
+
+        tl = m ? +m[1] : 0;
+      }
+
+      return { tl, loc: norm(txt.split('·').slice(1).join('·')) };
+    }
+
+    function hereHunt(loc) {
+      if (!data.hunts || !loc) return null;
+
+      const last = data.hunts.find((h) => h.slug === data.lastSlug);
+
+      if (last && norm(last.name) === loc) return last;
+
+      return data.hunts.find((h) => norm(h.name) === loc) || null;
+    }
+
+    function effOf(types) {
+      const L = data.leader && data.leader.types;
+
+      if (!L || !L.length || !types.length) return null;
+
+      let best = null;
+
+      L.forEach((a) => {
+        let m = 1;
+
+        types.forEach((d) => {
+          const v = CHART[a] && CHART[a][d];
+
+          if (v !== undefined) m *= v;
+        });
+
+        if (best === null || m > best) best = m;
+      });
+
+      return best;
+    }
+
+    const effLabel = (m) => (m === 1.5 ? 1.75 : m === 2 ? 2.5 : m >= 4 ? 5.5 : m === 0.5 ? 0.33 : m);
+
+    /* ---------- estilos ---------- */
+
+    const CSS = `
+      #hl-win{--bg:#0c141b;--panel:#101a23;--row:#121e28;--row2:#172633;--line:#1b2b38;--tx:#e3eaf1;--dim:#768a9c;--gold:#f0c661;--ok:#57d38c;--bad:#ef6a6a;--r:14px;
+        position:fixed;z-index:2147483600;width:min(920px,96vw);height:min(760px,88vh);display:none;flex-direction:column;
+        background:var(--bg);color:var(--tx);border:1px solid #223444;border-radius:var(--r);box-shadow:0 24px 70px rgba(0,0,0,.6);
+        font:13px/1.35 Inter,Barlow,system-ui,sans-serif;overflow:hidden}
+      #hl-win.on{display:flex}
+      #hl-win *{box-sizing:border-box}
+      #hl-win button{font:inherit}
+      #hl-win input{font:inherit;color:var(--tx)}
+
+      .hl-top{display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid var(--line);cursor:move;user-select:none}
+      .hl-title{font-weight:800;font-size:15px;letter-spacing:.01em}
+      .hl-areas{display:flex;gap:2px;padding:3px;background:#081017;border:1px solid var(--line);border-radius:10px}
+      .hl-areas button{all:unset;cursor:pointer;padding:6px 12px;border-radius:7px;font-size:12px;font-weight:600;color:var(--dim);display:flex;align-items:center;gap:6px}
+      .hl-areas button:hover{color:var(--tx)}
+      .hl-areas button.on{background:var(--row2);color:var(--tx);box-shadow:inset 0 0 0 1px #2a4052}
+      .hl-areas small{font-size:10px;color:var(--dim);font-weight:700}
+      .hl-x{all:unset;cursor:pointer;margin-left:auto;width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:18px}
+      .hl-x:hover{background:var(--row2);color:var(--tx)}
+
+      .hl-here{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:linear-gradient(90deg,rgba(240,198,97,.08),transparent 70%)}
+      .hl-here .hl-spr{width:44px;height:44px}
+      .hl-side{display:flex;align-items:center;gap:10px;min-width:0}
+      .hl-flip img{transform:scaleX(-1)}
+      .hl-vs{flex:none;display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;color:var(--gold);background:rgba(240,198,97,.1);box-shadow:inset 0 0 0 1px rgba(240,198,97,.3)}
+      .hl-here .lbl{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+      .hl-here .nm{font-weight:700;font-size:14px}
+      .hl-cities{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+
+      .hl-tools{display:flex;align-items:center;gap:8px;padding:10px 14px 6px;flex-wrap:wrap}
+      .hl-search{flex:1 1 220px;display:flex;align-items:center;gap:8px;height:34px;padding:0 12px;background:var(--panel);border:1px solid var(--line);border-radius:9px}
+      .hl-search:focus-within,.hl-lv:focus-within{border-color:#35526a}
+      .hl-search svg{flex:none;color:var(--dim)}
+      .hl-clear{all:unset;cursor:pointer;display:none;flex:none;width:20px;height:20px;border-radius:50%;align-items:center;justify-content:center;font-size:11px;color:var(--dim);background:var(--row2)}
+      .hl-clear:hover{color:var(--tx);background:#22384a}
+      .hl-search.has .hl-clear{display:flex}
+      .hl-search input,.hl-lv input{all:unset;flex:1;min-width:0;height:100%}
+      .hl-search input::placeholder,.hl-lv input::placeholder{color:#4f6273}
+      .hl-lv{display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;background:var(--panel);border:1px solid var(--line);border-radius:9px;color:var(--dim);font-size:12px}
+      .hl-lv input{width:44px;text-align:center}
+      .hl-chips{display:flex;gap:6px;flex-wrap:wrap}
+      .hl-chip{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 11px;border-radius:14px;
+        background:var(--panel);border:1px solid var(--line);color:var(--dim);font-size:12px;font-weight:600;white-space:nowrap}
+      .hl-chip:hover{color:var(--tx);border-color:#2c4658}
+      .hl-chip.on{color:#1b1406;background:var(--gold);border-color:var(--gold)}
+      .hl-chip.here{color:var(--gold);border-color:rgba(240,198,97,.5)}
+
+      .hl-types{display:flex;flex-wrap:wrap;gap:5px;padding:4px 14px 10px}
+      .hl-tp{all:unset;cursor:pointer;flex:none;height:22px;padding:0 9px;border-radius:11px;font-size:11px;font-weight:700;color:var(--c);
+        background:color-mix(in srgb,var(--c) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c) 40%,transparent)}
+      .hl-tp:hover{background:color-mix(in srgb,var(--c) 22%,transparent)}
+      .hl-tp.on{background:var(--c);color:#fff;text-shadow:0 1px 1px rgba(0,0,0,.35);box-shadow:none}
+
+      .hl-grid{display:grid;grid-template-columns:48px minmax(0,1fr) 56px 72px 88px 58px 56px 58px;align-items:center;column-gap:10px}
+      .hl-head{padding:0 14px;height:30px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:#0a1117;
+        color:var(--dim);font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;overflow-y:hidden;scrollbar-gutter:stable}
+      .hl-head [data-sort]{cursor:pointer;text-align:right}
+      .hl-head [data-sort]:hover{color:var(--tx)}
+      .hl-head [data-sort].on{color:var(--gold)}
+      .hl-head .l{text-align:left}
+
+      .hl-body{flex:1;min-height:0;overflow-y:auto;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:#253a4b transparent}
+      .hl-sep{padding:7px 14px;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);background:#0a1117;border-bottom:1px solid var(--line)}
+      .hl-row{position:relative;padding:5px 14px;min-height:56px;border-bottom:1px solid var(--line);cursor:pointer;transition:background .1s}
+      .hl-row:hover{background:var(--row)}
+      .hl-row:hover .hl-go{opacity:1}
+      .hl-row.here{background:linear-gradient(90deg,rgba(240,198,97,.1),transparent 60%)}
+      .hl-row.here::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--gold)}
+      .hl-row.locked{cursor:default;opacity:.4}
+      .hl-spr{width:48px;height:48px;display:flex;align-items:center;justify-content:center}
+      .hl-spr img{max-width:100%;max-height:100%;image-rendering:pixelated}
+      .hl-ph{width:28px;height:28px;border-radius:50%;background:var(--row2);display:flex;align-items:center;justify-content:center;color:var(--dim);font-weight:700}
+      .hl-main{min-width:0;display:flex;flex-direction:column;gap:4px}
+      .hl-name{display:flex;align-items:center;gap:7px;font-weight:700;font-size:14px;white-space:nowrap}
+      .hl-name .t{min-width:0;overflow:hidden;text-overflow:ellipsis}
+      .hl-ball{flex:none;width:12px;height:12px;opacity:.22;filter:grayscale(1)}
+      .hl-ball.on{opacity:1;filter:none}
+      .hl-tag{flex:none;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#1b1406;background:var(--gold);border-radius:4px;padding:2px 5px}
+      .hl-go{flex:none;font-size:11px;font-weight:600;color:var(--gold);opacity:0;transition:opacity .1s}
+      .hl-mini{display:flex;gap:4px;flex:none}
+      .hl-mini span{font-size:10px;font-weight:700;padding:1px 7px;border-radius:4px;color:#fff;background:var(--c);text-shadow:0 1px 1px rgba(0,0,0,.3)}
+      .hl-num{text-align:right;font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap}
+      .hl-num.dim{color:var(--dim)}
+      .hl-num.xp{color:#9ec9ff}
+      .hl-num.gold{color:var(--gold)}
+      .hl-eff{justify-self:end;font-size:11px;font-weight:800;padding:3px 7px;border-radius:6px;color:var(--dim);background:var(--row2)}
+      .hl-eff.good{color:#08210f;background:var(--ok)}
+      .hl-eff.bad{color:#fff;background:var(--bad)}
+      .hl-acts{display:flex;justify-content:flex-end;gap:2px}
+      .hl-ib{all:unset;cursor:pointer;width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:14px}
+      .hl-ib:hover{background:var(--row2);color:var(--tx)}
+      .hl-ib.fav.on{color:var(--gold)}
+      .hl-ib.more.on{color:var(--tx);transform:rotate(180deg)}
+      .hl-loot{display:flex;flex-direction:column;gap:6px;padding:8px 14px 12px 72px;background:#0a1117;border-bottom:1px solid var(--line)}
+      .hl-dh{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin-top:4px}
+      .hl-its{display:flex;flex-wrap:wrap;gap:6px}
+      .hl-wk{display:flex;flex-direction:column;gap:6px}
+      .hl-wk > div{display:flex;align-items:center;gap:8px}
+      .hl-dimtxt{color:var(--dim);font-size:12px}
+      .hl-pk b{margin-left:2px;padding:1px 5px;font-size:10px}
+      .hl-pk.team{border-color:rgba(240,198,97,.45)}
+      .hl-it{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px 0 6px;border-radius:7px;background:var(--row);border:1px solid var(--line);font-size:12px}
+      .hl-it img{width:20px;height:20px;object-fit:contain;image-rendering:pixelated}
+      .hl-it small{color:var(--dim);font-variant-numeric:tabular-nums}
+      .hl-empty{padding:40px;text-align:center;color:var(--dim)}
+
+      .hl-foot{display:flex;align-items:center;gap:10px;padding:8px 14px;border-top:1px solid var(--line);color:var(--dim);font-size:11.5px}
+
+      html.hl-silent .map-window{visibility:hidden!important}
+      #hl-toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:2147483601;background:#101a23;color:#e3eaf1;
+        border:1px solid #2a4052;border-radius:10px;padding:10px 16px;font:13px Inter,system-ui,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+
+      @media (max-width:640px){
+        .hl-grid{grid-template-columns:40px minmax(0,1fr) 44px 70px 44px}
+        .hl-grid > :nth-child(5),.hl-grid > :nth-child(6),.hl-grid > :nth-child(8){display:none}
+        .hl-cities{display:none}
+      }
+    `;
+
+    const BALL =
+      '<svg class="hl-ball{on}" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#fff" stroke="#1b1b1b" stroke-width="1.4"/><path d="M1 8a7 7 0 0 1 14 0z" fill="#e3350d" stroke="#1b1b1b" stroke-width="1.4"/><path d="M1 8h14" stroke="#1b1b1b" stroke-width="1.4"/><circle cx="8" cy="8" r="2.2" fill="#fff" stroke="#1b1b1b" stroke-width="1.4"/></svg>';
+
+    /* ---------- janela ---------- */
+
+    let win = null;
+
+    function build() {
+      if (win) return;
+
+      const style = document.createElement('style');
+
+      style.textContent = CSS;
+      document.head.appendChild(style);
+
+      win = document.createElement('div');
+      win.id = 'hl-win';
+      win.innerHTML = `
+        <div class="hl-top" data-drag>
+          <div class="hl-title">Hunts</div>
+          <div class="hl-areas"></div>
+          <button type="button" class="hl-x" data-close title="Fechar (Esc)">✕</button>
+        </div>
+        <div class="hl-here"></div>
+        <div class="hl-tools">
+          <label class="hl-search">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input type="text" data-in="q" placeholder="Buscar hunt ou loot…" autocomplete="off" spellcheck="false">
+            <button type="button" class="hl-clear" data-clear-q title="Limpar busca">✕</button>
+          </label>
+          <div class="hl-lv">Nv <input type="text" inputmode="numeric" data-in="lo" placeholder="mín"> – <input type="text" inputmode="numeric" data-in="hi" placeholder="máx"></div>
+          <div class="hl-chips"></div>
+        </div>
+        <div class="hl-types"></div>
+        <div class="hl-head hl-grid"></div>
+        <div class="hl-body"></div>
+        <div class="hl-foot"><span class="hl-info"></span></div>`;
+      document.body.appendChild(win);
+
+      win.addEventListener('click', onClick);
+      win.addEventListener('input', onInput);
+      ['keydown', 'keyup', 'keypress'].forEach((t) =>
+        win.addEventListener(t, (e) => {
+          if (e.key === 'Escape' && t === 'keydown') close();
+
+          e.stopPropagation();
+        })
+      );
+      dragify(win.querySelector('[data-drag]'));
+      place();
+    }
+
+    function place() {
+      const p = ls.get('pos', null);
+      const r = win.getBoundingClientRect();
+      const W = r.width || Math.min(920, innerWidth * 0.96);
+      const H = r.height || Math.min(760, innerHeight * 0.88);
+      const x = p ? p.x : (innerWidth - W) / 2;
+      const y = p ? p.y : (innerHeight - H) / 2;
+
+      win.style.left = Math.max(0, Math.min(innerWidth - W, x)) + 'px';
+      win.style.top = Math.max(0, Math.min(innerHeight - 60, y)) + 'px';
+    }
+
+    function dragify(h) {
+      h.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0 || e.target.closest('button,input')) return;
+
+        const r = win.getBoundingClientRect();
+        const ox = e.clientX - r.left;
+        const oy = e.clientY - r.top;
+        const mv = (ev) => {
+          win.style.left = Math.max(0, Math.min(innerWidth - r.width, ev.clientX - ox)) + 'px';
+          win.style.top = Math.max(0, Math.min(innerHeight - 60, ev.clientY - oy)) + 'px';
+        };
+        const up = () => {
+          removeEventListener('pointermove', mv);
+          removeEventListener('pointerup', up);
+          ls.set('pos', { x: parseFloat(win.style.left), y: parseFloat(win.style.top) });
+        };
+
+        addEventListener('pointermove', mv);
+        addEventListener('pointerup', up);
+      });
+    }
+
+    let timer = 0;
+
+    function open() {
+      build();
+      win.classList.add('on');
+      place();
+
+      if (!data.hunts) loadStatic();
+
+      loadLeader();
+      loadCaught();
+      lastSig = '';
+      render();
+      clearInterval(timer);
+      timer = setInterval(render, 1500);
+      setTimeout(() => win.querySelector('[data-in="q"]').focus(), 30);
+    }
+
+    function close() {
+      if (!win) return;
+
+      win.classList.remove('on');
+      clearInterval(timer);
+    }
+
+    const isOpen = () => win && win.classList.contains('on');
+
+    function toast(msg) {
+      let t = document.getElementById('hl-toast');
+
+      if (!t) {
+        t = document.createElement('div');
+        t.id = 'hl-toast';
+        document.body.appendChild(t);
+      }
+
+      t.textContent = msg;
+      t.hidden = false;
+      clearTimeout(t._h);
+      t._h = setTimeout(() => (t.hidden = true), 3500);
+    }
+
+    /* ---------- render ---------- */
+
+    function sprite(h) {
+      if (!h || !h.pid) return `<div class="hl-ph">${esc(((h && h.name) || '?')[0])}</div>`;
+
+      const sh = h.shiny ? 'shiny/' : '';
+
+      return `<img loading="lazy" src="${SPR}/versions/generation-v/black-white/animated/${sh}${h.pid}.gif" data-still="${SPR}/${sh}${h.pid}.png" alt="">`;
+    }
+
+    const typePills = (types) =>
+      types.map((t) => `<span style="--c:${(TYPES[t] || ['', '#666'])[1]}">${esc((TYPES[t] || [t])[0])}</span>`).join('');
+
+    // Tipos de ataque que acertam a hunt com vantagem (2x → 2.5x, 4x → 5.5x no jogo).
+    function weakTypes(def) {
+      const out = { 5.5: [], 2.5: [] };
+
+      Object.keys(TYPES).forEach((a) => {
+        let m = 1;
+
+        def.forEach((d) => {
+          const v = CHART[a] && CHART[a][d];
+
+          if (v !== undefined) m *= v;
+        });
+
+        if (m >= 4) out[5.5].push(a);
+        else if (m >= 2) out[2.5].push(a);
+      });
+
+      return out;
+    }
+
+    function myPokesVs(h) {
+      if (!data.pokes || !data.cre || !h.types.length) return [];
+
+      const best = new Map();
+
+      data.pokes.forEach((p) => {
+        const c = data.cre.byId.get(+p.speciesId) || data.cre.byName.get(norm(p.name));
+        const types = c ? [c.type1, c.type2].filter(Boolean).map((t) => String(t).toLowerCase()) : [];
+        let m = null;
+
+        types.forEach((a) => {
+          let x = 1;
+
+          h.types.forEach((d) => {
+            const v = CHART[a] && CHART[a][d];
+
+            if (v !== undefined) x *= v;
+          });
+
+          if (m === null || x > m) m = x;
+        });
+
+        if (!(m >= 2)) return;
+
+        const name = p.name || (c && c.name) || '?';
+        const key = norm(name);
+        const lv = +p.level || 0;
+        const cur = best.get(key);
+
+        if (!cur || lv > cur.lv) best.set(key, { name, lv, m, pid: c ? spriteId(c, name) : 0, shiny: !!p.shiny, team: !!p.team });
+      });
+
+      return [...best.values()].sort((a, b) => b.m - a.m || b.lv - a.lv).slice(0, 18);
+    }
+
+    function weakHtml(h) {
+      if (!h.types.length) return '';
+
+      const w = weakTypes(h.types);
+      const pills = (arr) => `<span class="hl-mini">${typePills(arr)}</span>`;
+      const mine = myPokesVs(h);
+
+      return `<div class="hl-dh">Fraco contra</div>
+        <div class="hl-wk">${
+          w[5.5].length ? `<div><span class="hl-eff good">5.5x</span>${pills(w[5.5])}</div>` : ''
+        }${w[2.5].length ? `<div><span class="hl-eff good">2.5x</span>${pills(w[2.5])}</div>` : ''}${
+        !w[5.5].length && !w[2.5].length ? '<div class="hl-dimtxt">Nenhum tipo acerta com vantagem.</div>' : ''
+      }</div>
+        <div class="hl-dh">Seus Pokémon com vantagem</div>
+        <div class="hl-its">${
+          !data.pokes
+            ? '<span class="hl-dimtxt">Carregando seus Pokémon…</span>'
+            : mine
+                .map(
+                  (p) =>
+                    `<span class="hl-it hl-pk${p.team ? ' team' : ''}" title="${p.team ? 'No time' : 'No depósito'}">${
+                      p.pid ? `<img src="${SPR}/${p.shiny ? 'shiny/' : ''}${p.pid}.png" alt="">` : ''
+                    }${esc(p.name)} <small>Nv ${p.lv}</small><b class="hl-eff good">${effLabel(p.m)}x</b></span>`
+                )
+                .join('') || '<span class="hl-dimtxt">Nenhum dos seus Pokémon tem vantagem aqui.</span>'
+        }</div>`;
+    }
+
+    function rowHtml(h, ctx) {
+      const locked = ctx.tl > 0 && h.level > ctx.tl;
+      const caught = h.c && data.caughtIds.has(+h.c.pokeId);
+      const e = effOf(h.types);
+      const fav = st.favs.has(h.slug);
+      const open = st.loot.has(h.slug);
+      const here = ctx.here && ctx.here.slug === h.slug;
+      const going = st.going === h.slug;
+
+      const loot = open
+        ? `<div class="hl-loot">${weakHtml(h)}<div class="hl-dh">Loot</div><div class="hl-its">${
+            h.loot
+              .map((l) => {
+                const ic = data.items.get(norm(l.name));
+                const pct =
+                  l.chance > 0 ? (l.chance / 1000).toLocaleString('pt-BR', { maximumFractionDigits: l.chance < 1000 ? 2 : 1 }) + '%' : '';
+
+                return `<span class="hl-it">${ic ? `<img src="${esc(ic)}" alt="">` : ''}${esc(l.name)}${pct ? ` <small>${pct}</small>` : ''}</span>`;
+              })
+              .join('') || '<span class="hl-it">Sem loot</span>'
+          }</div></div>`
+        : '';
+
+      return `<div class="hl-row hl-grid${here ? ' here' : ''}${locked ? ' locked' : ''}" data-slug="${esc(h.slug)}" title="${
+        locked ? 'Requer nível ' + h.level : 'Viajar para ' + esc(h.name)
+      }">
+          <div class="hl-spr">${sprite(h)}</div>
+          <div class="hl-main">
+            <div class="hl-name">${BALL.replace('{on}', caught ? ' on' : '')}<span class="t">${esc(h.name)}</span><span class="hl-mini">${typePills(h.types)}</span>${
+        here ? '<span class="hl-tag">aqui</span>' : going ? '<span class="hl-go" style="opacity:1">Viajando…</span>' : locked ? '' : '<span class="hl-go">Viajar →</span>'
+      }</div>
+          </div>
+          <div class="hl-num dim">${locked ? '🔒 ' : ''}${h.level}</div>
+          <div class="hl-num xp">${h.xp ? fmt(h.xp) : '—'}</div>
+          <div class="hl-num gold" title="${h.gold ? '$ ' + fmt(h.gold) : ''}">${h.gold ? '$ ' + short(h.gold) : '—'}</div>
+          <div class="hl-num dim" title="Total de atributos base">${h.total || '—'}</div>
+          <span class="hl-eff ${e == null ? '' : e > 1 ? 'good' : e < 1 ? 'bad' : ''}">${e == null ? '—' : effLabel(e) + 'x'}</span>
+          <div class="hl-acts">
+            <button type="button" class="hl-ib more${open ? ' on' : ''}" data-more title="Fraquezas e loot">▾</button>
+            <button type="button" class="hl-ib fav${fav ? ' on' : ''}" data-fav title="Favorita">${fav ? '★' : '☆'}</button>
+          </div>
+        </div>${loot}`;
+    }
+
+    let lastSig = '';
+
+    function render() {
+      if (!isOpen()) return;
+
+      const H = hud();
+      const here = hereHunt(H.loc);
+      const ctx = { tl: H.tl, here };
+      const sig = [H.tl, here && here.slug, data.ver, st.ver, st.q, st.lo, st.hi, st.area].join('|');
+
+      if (sig === lastSig) return;
+
+      lastSig = sig;
+
+      const q = (s) => win.querySelector(s);
+
+      q('.hl-areas').innerHTML = AREAS.map(([k, label]) => {
+        const min = data.areaMin ? data.areaMin[k] : 0;
+        const lockd = H.tl && min > H.tl;
+
+        return `<button type="button" data-area="${k}" class="${st.area === k ? 'on' : ''}">${label}${lockd ? ` <small>🔒 ${min}</small>` : ''}</button>`;
+      }).join('');
+
+      if (!data.hunts) {
+        q('.hl-body').innerHTML = '<div class="hl-empty">Carregando hunts…</div>';
+
+        return;
+      }
+
+      const inArea = data.hunts.filter((h) => h.area === st.area);
+      const cities = inArea.filter((h) => h.city);
+
+      const ld = data.leader;
+      const lv = (n) => (n ? ' <span class="hl-num dim" style="font-size:12px">· Nv ' + n + '</span>' : '');
+
+      q('.hl-here').innerHTML = `
+        <div class="hl-side">
+          <div class="hl-spr hl-flip">${ld && ld.name ? sprite(ld) : '<div class="hl-ph">?</div>'}</div>
+          <div><div class="lbl">Seu Pokémon</div><div class="nm">${ld && ld.name ? esc(ld.name) + lv(ld.level) : '—'}</div></div>
+        </div>
+        <div class="hl-vs" title="${here && !here.city ? 'Caçando' : 'Na cidade'}">${
+          here && !here.city
+            ? '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="m13 19 6-6"/><path d="m16 16 4 4"/><path d="m19 21 2-2"/><path d="M14.5 6.5 18 3h3v3l-3.5 3.5"/><path d="m5 14 4 4"/><path d="m7 17-3 3"/><path d="m3 19 2 2"/></svg>'
+            : '<span style="font-size:18px">📍</span>'
+        }</div>
+        <div class="hl-side">
+          <div class="hl-spr">${here && !here.city ? sprite(here) : '<div class="hl-ph">🏙</div>'}</div>
+          <div><div class="lbl">${here && !here.city ? 'Caçando' : 'Você está em'}</div><div class="nm">${
+        here ? esc(here.name) + (here.city ? '' : lv(here.level)) : esc(H.loc || '—')
+      }</div></div>
+          ${
+            here && !here.city && effOf(here.types) != null
+              ? (() => {
+                  const e = effOf(here.types);
+
+                  return `<span class="hl-eff ${e > 1 ? 'good' : e < 1 ? 'bad' : ''}" title="Vantagem do seu Pokémon">${effLabel(e)}x</span>`;
+                })()
+              : ''
+          }
+        </div>
+        <div class="hl-cities">${cities
+          .map((h) => `<button type="button" class="hl-chip${here && here.slug === h.slug ? ' here' : ''}" data-city="${esc(h.slug)}">🏙 ${esc(h.name)}</button>`)
+          .join('')}</div>`;
+
+      const capLbl = st.caught === 'yes' ? 'Capturados' : st.caught === 'no' ? 'Não capturados' : 'Captura';
+
+      q('.hl-chips').innerHTML = `
+        <button type="button" class="hl-chip${st.open ? ' on' : ''}" data-f="open" title="Só hunts até o seu nível">Acessíveis</button>
+        <button type="button" class="hl-chip${st.favOnly ? ' on' : ''}" data-f="fav">★ Favoritas</button>
+        <button type="button" class="hl-chip${st.caught ? ' on' : ''}" data-f="caught" title="Alterna: não capturados → capturados → todos">${BALL.replace('{on}', ' on')} ${capLbl}</button>`;
+
+      let list = inArea.filter((h) => !h.city);
+      const present = Object.keys(TYPES).filter((t) => list.some((h) => h.types.includes(t)));
+
+      q('.hl-types').innerHTML =
+        present
+          .map((t) => `<button type="button" class="hl-tp${st.types.has(t) ? ' on' : ''}" data-type="${t}" style="--c:${TYPES[t][1]}">${TYPES[t][0]}</button>`)
+          .join('') + (st.types.size ? '<button type="button" class="hl-chip" data-f="clear" style="height:22px">Limpar</button>' : '');
+
+      const nq = norm(st.q);
+
+      if (nq) list = list.filter((h) => norm(h.name).includes(nq) || h.loot.some((l) => norm(l.name).includes(nq)));
+      if (st.lo != null) list = list.filter((h) => h.level >= st.lo);
+      if (st.hi != null) list = list.filter((h) => h.level <= st.hi);
+      if (st.open && H.tl) list = list.filter((h) => h.level <= H.tl);
+      if (st.favOnly) list = list.filter((h) => st.favs.has(h.slug));
+      if (st.types.size) list = list.filter((h) => h.types.some((t) => st.types.has(t)));
+      if (st.caught) list = list.filter((h) => !!(h.c && data.caughtIds.has(+h.c.pokeId)) === (st.caught === 'yes'));
+
+      const key = {
+        name: (h) => h.name,
+        level: (h) => h.level,
+        xp: (h) => h.xp,
+        gold: (h) => h.gold,
+        total: (h) => h.total,
+        eff: (h) => effOf(h.types) ?? -1
+      }[st.sort.k];
+
+      list.sort((a, b) => {
+        const x = key(a);
+        const y = key(b);
+        const r = typeof x === 'string' ? x.localeCompare(y) : x - y;
+
+        return (r || a.level - b.level) * st.sort.d;
+      });
+
+      const col = (k, label, cls = '') =>
+        `<div class="${cls}${st.sort.k === k ? ' on' : ''}" data-sort="${k}">${label}${st.sort.k === k ? (st.sort.d > 0 ? ' ↑' : ' ↓') : ''}</div>`;
+
+      q('.hl-head').innerHTML = `<div></div>${col('name', 'Hunt', 'l')}${col('level', 'Nv')}${col('xp', 'XP')}${col('gold', 'Valor')}${col('total', 'Total')}${col('eff', 'Vant.')}<div></div>`;
+
+      const favs = list.filter((h) => st.favs.has(h.slug));
+      const rest = list.filter((h) => !st.favs.has(h.slug));
+      const body = q('.hl-body');
+      const keep = body.scrollTop;
+
+      body.innerHTML = list.length
+        ? (favs.length
+            ? '<div class="hl-sep">★ Favoritas</div>' + favs.map((h) => rowHtml(h, ctx)).join('') + (rest.length ? '<div class="hl-sep">Todas</div>' : '')
+            : '') + rest.map((h) => rowHtml(h, ctx)).join('')
+        : '<div class="hl-empty">Nenhuma hunt com esses filtros.</div>';
+      body.scrollTop = keep;
+
+      win.querySelectorAll('.hl-spr img').forEach((img) => {
+        img.onerror = () => {
+          if (img.dataset.still && img.src !== img.dataset.still) img.src = img.dataset.still;
+          else img.replaceWith(Object.assign(document.createElement('div'), { className: 'hl-ph', textContent: '?' }));
+        };
+      });
+
+      const lead = data.leader && data.leader.types.length ? data.leader : null;
+
+      q('.hl-info').innerHTML =
+        `${list.length} hunts` +
+        (H.tl ? ` · seu nível ${H.tl}` : '') +
+        (lead ? ` · vantagem calculada para <b style="color:var(--tx)">${esc(lead.name)}</b> <span class="hl-mini" style="display:inline-flex;vertical-align:middle">${typePills(lead.types)}</span>` : '');
+    }
+
+    /* ---------- eventos ---------- */
+
+    function onInput(e) {
+      const k = e.target.dataset.in;
+
+      if (!k) return;
+
+      const v = e.target.value.trim();
+
+      if (k === 'q') {
+        st.q = v;
+        win.querySelector('.hl-search').classList.toggle('has', v !== '');
+      } else st[k] = v === '' || isNaN(+v) ? null : +v;
+
+      render();
+    }
+
+    function onClick(e) {
+      const t = e.target;
+      const g = (s) => t.closest(s);
+
+      if (g('[data-close]')) return close();
+
+      if (g('[data-clear-q]')) {
+        const inp = win.querySelector('[data-in="q"]');
+
+        inp.value = '';
+        st.q = '';
+        win.querySelector('.hl-search').classList.remove('has');
+        inp.focus();
+        render();
+
+        return;
+      }
+
+      const area = g('[data-area]');
+      const f = g('[data-f]');
+      const tp = g('[data-type]');
+      const so = g('[data-sort]');
+      const city = g('[data-city]');
+      const row = g('.hl-row');
+
+      if (area) {
+        st.area = area.dataset.area;
+        ls.set('area', st.area);
+        win.querySelector('.hl-body').scrollTop = 0;
+      } else if (f) {
+        const k = f.dataset.f;
+
+        if (k === 'open') ls.set('open', (st.open = !st.open));
+        if (k === 'fav') st.favOnly = !st.favOnly;
+        if (k === 'caught') ls.set('caught', (st.caught = st.caught === '' ? 'no' : st.caught === 'no' ? 'yes' : ''));
+        if (k === 'clear') st.types.clear();
+
+        ls.set('types', [...st.types]);
+      } else if (tp) {
+        const k = tp.dataset.type;
+
+        st.types.has(k) ? st.types.delete(k) : st.types.add(k);
+        ls.set('types', [...st.types]);
+      } else if (so) {
+        const k = so.dataset.sort;
+
+        st.sort = st.sort.k === k ? { k, d: -st.sort.d } : { k, d: k === 'level' || k === 'name' ? 1 : -1 };
+        ls.set('sort', st.sort);
+      } else if (city) {
+        travel(city.dataset.city);
+
+        return;
+      } else if (row) {
+        const slug = row.dataset.slug;
+
+        if (g('[data-fav]')) {
+          st.favs.has(slug) ? st.favs.delete(slug) : st.favs.add(slug);
+          ls.set('favs', [...st.favs]);
+        } else if (g('[data-more]')) {
+          st.loot.has(slug) ? st.loot.delete(slug) : st.loot.add(slug);
+        } else {
+          if (!row.classList.contains('locked')) travel(slug);
+
+          return;
+        }
+      } else {
+        return;
+      }
+
+      st.ver++;
+      render();
+    }
+
+    /* ---------- botão Mapa do jogo ---------- */
+
+    let passNative = false;
+
+    function nativeMap() {
+      const b = document.querySelector('[data-guide="dock-map"]');
+
+      if (!b) return;
+
+      passNative = true;
+      b.click();
+      passNative = false;
+    }
+
+    document.addEventListener(
+      'click',
+      (e) => {
+        const b = e.target.closest && e.target.closest('[data-guide="dock-map"]');
+
+        if (!b || passNative || e.altKey) return;
+
+        e.preventDefault();
+        e.stopImmediatePropagation();
+
+        isOpen() ? close() : open();
+      },
+      true
+    );
+
+    document.addEventListener(
+      'keydown',
+      (e) => {
+        if (e.key === 'Escape' && isOpen()) close();
+      },
+      true
+    );
+
+    const boot = () => {
+      loadStatic();
+    };
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+    else boot();
+    /* ---------- menu compacto ---------- */
+
+    (() => {
+      const ICON_SIZE = 76;
+      const GAP = 8;
+      const COLS = 4;
+      const PANEL_PAD = 14;
+      const PANEL_WIDTH = COLS * ICON_SIZE + (COLS - 1) * GAP + PANEL_PAD * 2;
+
+      // Limpeza defensiva: remove qualquer botão fantasma de versão antiga do script
+      // que ainda esteja solto no DOM (id usado em tentativas anteriores).
+      (function cleanupLegacyButton() {
+        const legacy = document.getElementById('hlm-permanent-market');
+        if (legacy) legacy.remove();
+      })();
+
+      const CSS = `
+        .hlm-fab {
+          position: fixed; right: 16px; bottom: 16px;
+          width: 46px; height: 46px; border-radius: 14px; padding: 0;
+          display: flex; align-items: center; justify-content: center;
+          background: rgba(12, 20, 27, .92); border: 1px solid #2a3a4a; color: #f0c661;
+          z-index: 99998; cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,.45);
+          backdrop-filter: blur(4px); transition: border-color .15s, background .15s, transform .15s;
+        }
+        .hlm-fab:hover { border-color: #f0c661; background: rgba(23, 38, 51, .95); transform: translateY(-1px); }
+        .hlm-fab svg { width: 20px; height: 20px; display: block; }
+        .market-cta { margin-right: 62px !important; }
+        .hlm-overlay {
+          position: fixed; inset: 0; background: rgba(0,0,0,.6);
+          z-index: 99999; display: none; align-items: flex-end;
+          justify-content: flex-end; padding: 16px; box-sizing: border-box;
+        }
+        .hlm-overlay.open { display: flex; }
+        .hlm-panel {
+          background: #10131f; border: 1px solid #2a2f45; border-radius: 14px;
+          width: ${PANEL_WIDTH}px; max-height: calc(100vh - 32px); overflow: hidden;
+          display: flex; flex-direction: column;
+          box-shadow: 0 8px 30px rgba(0,0,0,.6); box-sizing: border-box;
+        }
+        .hlm-head {
+          display: flex; align-items: center; justify-content: space-between; gap: 8px;
+          padding: 10px 14px; border-bottom: 1px solid #2a2f45; background: #151a2a;
+          flex-shrink: 0;
+        }
+        .hlm-head h3 {
+          margin: 0; font-size: 13px; letter-spacing: .08em; text-transform: uppercase;
+          color: #f4b942; font-weight: 700; white-space: nowrap;
+        }
+        .hlm-head-actions { display: flex; align-items: center; gap: 6px; }
+        .hlm-edit-btn {
+          background: #1e2438; border: 1px solid #2a2f45; color: #c7cbe0;
+          font-size: 11px; font-weight: 600; border-radius: 6px; padding: 5px 9px;
+          cursor: pointer; white-space: nowrap;
+        }
+        .hlm-edit-btn:hover { border-color: #f4b942; }
+        .hlm-panel.editing .hlm-edit-btn { background: #f4b942; border-color: #f4b942; color: #10131f; }
+        .hlm-close { background: none; border: none; color: #8a90ab; font-size: 18px; cursor: pointer; line-height: 1; padding: 0 2px; }
+        .hlm-close:hover { color: #fff; }
+        .hlm-hint {
+          display: none; padding: 6px 14px; font-size: 11px; color: #f4b942;
+          background: #1a1d2e; border-bottom: 1px solid #2a2f45; flex-shrink: 0;
+        }
+        .hlm-panel.editing .hlm-hint { display: block; }
+        .hlm-body { padding: ${PANEL_PAD}px; overflow-y: auto; overflow-x: hidden; box-sizing: border-box; position: relative; }
+        .hlm-body::-webkit-scrollbar { width: 6px; }
+        .hlm-body::-webkit-scrollbar-thumb { background: #2a2f45; border-radius: 3px; }
+        .hlm-body::-webkit-scrollbar-track { background: transparent; }
+        .hlm-row { display: grid; grid-template-columns: repeat(${COLS}, ${ICON_SIZE}px); gap: ${GAP}px; }
+        .hlm-sep {
+          display: flex; align-items: center; gap: 8px; color: #6b7190;
+          font-size: 10px; text-transform: uppercase; letter-spacing: .08em; margin: 12px 0;
+        }
+        .hlm-sep::before, .hlm-sep::after { content: ''; flex: 1; height: 1px; background: #2a2f45; }
+        .hlm-item {
+          position: relative; display: flex; flex-direction: column; align-items: center;
+          justify-content: center; gap: 5px; width: ${ICON_SIZE}px; height: ${ICON_SIZE}px;
+          background: #171c2c; border: 1px solid #2a2f45; border-radius: 10px; cursor: pointer;
+          color: #c7cbe0; font-size: 10px; font-weight: 600; text-align: center;
+          padding: 6px 4px; box-sizing: border-box; transition: border-color .12s, background .12s;
+          user-select: none;
+        }
+        .hlm-item:hover, .hlm-item.hlm-hover { background: #1e2438; border-color: #3a4060; }
+        .hlm-item.pinned { border-color: rgba(244,185,66,.6); background: rgba(244,185,66,.1); color: #f4d58a; }
+        .hlm-item.pinned:hover, .hlm-item.pinned.hlm-hover { background: rgba(244,185,66,.10); border-color: #8a7a52; }
+        .hlm-item img, .hlm-item svg { width: 30px; height: 30px; object-fit: contain; flex-shrink: 0; pointer-events: none; }
+        .hlm-item span {
+          line-height: 1.15; display: -webkit-box; -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical; overflow: hidden; pointer-events: none;
+        }
+        .hlm-badge {
+          position: absolute; top: -4px; right: -4px; background: #d33; color: #fff;
+          border-radius: 10px; font-size: 9px; font-weight: 700; padding: 1px 5px;
+          pointer-events: none; border: 1px solid #10131f;
+        }
+      `;
+
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      const isPokeBtn = (btn) => {
+        const t = (btn.getAttribute('title') || '').trim();
+        const g = btn.getAttribute('data-guide') || '';
+
+        return /^pok[eé]mons?$/i.test(t) || /^dock-pok(e|es|emon|emons)$/i.test(g);
+      };
+
+      // O botão "Pokémon" abre um submenu; acha a opção pelo texto.
+      function findOpt(label) {
+        const rx = new RegExp('^\\s*' + label + '\\s*$', 'i');
+        const ok = (el) => !el.closest('.hlm-overlay') && rx.test(el.textContent);
+
+        return (
+          Array.from(document.querySelectorAll('button, [role="button"], a')).find(ok) ||
+          Array.from(document.querySelectorAll('li, div')).find(el => el.children.length <= 2 && ok(el)) ||
+          null
+        );
+      }
+
+      async function openPokeSub(btn, label) {
+        let opt = findOpt(label);
+
+        if (!opt) {
+          btn.click();
+
+          for (let i = 0; i < 30 && !opt; i++) {
+            await sleep(50);
+            opt = findOpt(label);
+          }
+        }
+
+        if (opt) opt.click();
+      }
+
+      // pega os itens do dock; o "Pokémon" vira "My Pokes" e "All Rare Pokes"
+      function collectEntries(dock) {
+        const entries = [];
+
+        Array.from(dock.querySelectorAll('button.dock-btn')).forEach(btn => {
+          const img = btn.querySelector('img');
+          const svg = btn.querySelector('svg');
+          const iconHtml = img ? `<img src="${img.src}" alt="">` : svg ? svg.outerHTML : '';
+          const badgeText = btn.querySelector('.dock-badge')?.textContent || null;
+
+          if (isPokeBtn(btn)) {
+            entries.push({ guide: 'pokes-my', label: 'My Pokes', iconHtml, badgeText, trigger: () => openPokeSub(btn, 'My Pokes') });
+            entries.push({ guide: 'pokes-rare', label: 'All Rare Pokes', iconHtml, badgeText: null, trigger: () => openPokeSub(btn, 'All Rare Pokes') });
+            return;
+          }
+
+          entries.push({
+            guide: btn.getAttribute('data-guide') || btn.getAttribute('title') || btn.textContent.trim(),
+            label: /picture.?in.?picture/i.test(btn.getAttribute('title') || btn.textContent) ? 'Picture in Picture' : btn.getAttribute('title') || btn.textContent.trim(),
+            iconHtml,
+            badgeText,
+            trigger: () => btn.click()
+          });
+        });
+
+        return entries;
+      }
+
+      function build() {
+        const dock = document.querySelector('.game-dock');
+        if (!dock) return false;
+
+        dock.style.position = 'fixed';
+        dock.style.left = '-9999px';
+
+        const style = document.createElement('style');
+        style.textContent = CSS;
+        document.head.appendChild(style);
+
+        const fab = document.createElement('button');
+        fab.className = 'hlm-fab';
+        fab.type = 'button';
+        fab.title = 'Menu';
+        fab.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="6" height="6" rx="1.6"/><rect x="14" y="4" width="6" height="6" rx="1.6"/><rect x="4" y="14" width="6" height="6" rx="1.6"/><rect x="14" y="14" width="6" height="6" rx="1.6"/></svg>';
+
+        const overlay = document.createElement('div');
+        overlay.className = 'hlm-overlay';
+
+        const panel = document.createElement('div');
+        panel.className = 'hlm-panel';
+
+        const head = document.createElement('div');
+        head.className = 'hlm-head';
+        const title = document.createElement('h3');
+        title.textContent = 'Menu';
+        const actions = document.createElement('div');
+        actions.className = 'hlm-head-actions';
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'hlm-close';
+        closeBtn.type = 'button';
+        closeBtn.textContent = '×';
+        actions.appendChild(closeBtn);
+        head.appendChild(title);
+        head.appendChild(actions);
+
+        const body = document.createElement('div');
+        body.className = 'hlm-body';
+        const allRow = document.createElement('div');
+        allRow.className = 'hlm-row hlm-all-row';
+        body.appendChild(allRow);
+
+        panel.appendChild(head);
+        panel.appendChild(body);
+        overlay.appendChild(panel);
+
+        function render() {
+          allRow.innerHTML = '';
+
+          collectEntries(dock).forEach(entry => {
+            const item = document.createElement('div');
+            item.className = 'hlm-item';
+            item.innerHTML = `${entry.iconHtml}<span>${entry.label}</span>`;
+
+            if (entry.badgeText) {
+              const b = document.createElement('span');
+              b.className = 'hlm-badge';
+              b.textContent = entry.badgeText;
+              item.appendChild(b);
+            }
+
+            item.addEventListener('click', () => {
+              entry.trigger();
+              overlay.classList.remove('open');
+            });
+
+            allRow.appendChild(item);
+          });
+        }
+
+        closeBtn.addEventListener('click', () => {
+          overlay.classList.remove('open');
+        });
+
+        // sempre que o overlay abrir, re-renderiza
+        fab.addEventListener('click', () => {
+          const opening = !overlay.classList.contains('open');
+          overlay.classList.toggle('open');
+          if (opening) render();
+        });
+
+        render();
+
+        overlay.addEventListener('click', (e) => {
+          if (e.target === overlay) {
+            overlay.classList.remove('open');
+          }
+        });
+
+        document.body.appendChild(fab);
+        document.body.appendChild(overlay);
+
+        // Se o script antigo "PokeIdle - Menu Compacto" ainda estiver ativo, some com o botão dele.
+        const killOld = () => document.querySelectorAll('.pi-fab, .pi-overlay').forEach((el) => el.remove());
+
+        killOld();
+        setInterval(killOld, 1000);
+
+        // Menu ao lado do "Ir ao Mercado", centralizado na altura dele.
+        const alignFab = () => {
+          const mk = document.querySelector('.market-cta');
+          const r = mk && mk.getBoundingClientRect();
+
+          if (r && r.height) {
+            fab.style.top = Math.round(r.top + (r.height - fab.offsetHeight) / 2) + 'px';
+            fab.style.bottom = 'auto';
+          } else {
+            fab.style.top = '';
+            fab.style.bottom = '';
+          }
+        };
+
+        alignFab();
+        setInterval(alignFab, 500);
+        window.addEventListener('resize', alignFab);
+        return true;
+      }
+
+      const interval = setInterval(() => {
+        if (build()) clearInterval(interval);
+      }, 500);
+    })();
+
+    /* ---------- chat ---------- */
+
+    (() => {
+      // Chat acima do botão "Alertas" do LiveSearch.
+      const st = document.createElement('style');
+
+      st.textContent = '.chat-box,.chat-fab{bottom:62px!important}';
+      (document.head || document.documentElement).appendChild(st);
+
+      // Começa minimizado (uma vez por carregamento; depois respeita o que você fizer).
+      const iv = setInterval(() => {
+        const min = document.querySelector('.chat-box .chat-min');
+
+        if (!min) return;
+
+        clearInterval(iv);
+        min.click();
+      }, 500);
+
+      setTimeout(() => clearInterval(iv), 60000);
+
+      // Largura inicial de 450px; depois o redimensionamento continua livre.
+      const widened = new WeakSet();
+
+      setInterval(() => {
+        const box = document.querySelector('.chat-box');
+
+        if (!box || widened.has(box) || !box.offsetWidth) return;
+
+        widened.add(box);
+        box.style.width = '450px';
+      }, 500);
+    })();
+
+    /* ---------- auto-helper (só visual) ---------- */
+
+    (() => {
+      const st = document.createElement('style');
+
+      st.textContent = `
+        .ah-panel .ah-head{all:unset;cursor:pointer;touch-action:none;user-select:none;-webkit-user-drag:none;display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:15px;
+          background:rgba(12,20,27,.92);border:1px solid #2a3a4a;color:#e3eaf1;font:600 12px/1 Inter,Barlow,system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.4)}
+        .ah-panel .ah-head:hover{border-color:#3d5a70}
+
+        .ah-overlay{background:rgba(0,0,0,.3)!important;backdrop-filter:none!important}
+        .ah-modal{--bg:#0c141b;--panel:#101a23;--row:#121e28;--row2:#172633;--line:#1b2b38;--tx:#e3eaf1;--dim:#768a9c;--on:#57d38c;
+          width:280px!important;max-width:94vw!important;padding:0!important;background:var(--bg)!important;color:var(--tx)!important;
+          border:1px solid #223444!important;border-radius:12px!important;box-shadow:0 18px 50px rgba(0,0,0,.55)!important;overflow:hidden!important;
+          font:12px/1.3 Inter,Barlow,system-ui,sans-serif!important}
+        .ah-modal *{font-family:inherit!important;box-sizing:border-box}
+
+        .ah-modal .ah-modal-title{display:flex!important;align-items:center!important;justify-content:space-between!important;margin:0!important;
+          padding:8px 8px 8px 12px!important;border-bottom:1px solid var(--line)!important;background:none!important}
+        .ah-modal .ah-modal-title span{font-size:13px!important;font-weight:800!important;letter-spacing:.01em!important;text-transform:none!important;color:var(--tx)!important;font-variant:normal!important}
+        .ah-modal .ah-modal-close{all:unset;cursor:pointer;width:24px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:13px}
+        .ah-modal .ah-modal-close:hover{background:var(--row2);color:var(--tx)}
+
+        .ah-modal .ah-body{display:flex!important;flex-direction:column!important;gap:6px!important;padding:8px!important;max-height:80vh;overflow-y:auto;
+          scrollbar-width:thin;scrollbar-color:#253a4b transparent}
+
+        .ah-modal .ah-row{display:flex!important;align-items:center!important;justify-content:space-between!important;gap:8px!important;
+          margin:0!important;padding:7px 10px!important;border-radius:8px!important;background:var(--row)!important;border:1px solid var(--line)!important;
+          box-shadow:none!important;cursor:pointer;transition:border-color .12s}
+        .ah-modal .ah-row:hover{border-color:#2c4658!important}
+        .ah-modal .ah-row:has(+ .ah-sub),.ah-modal .ah-row:has(+ .ah-warn){border-bottom-left-radius:0!important;border-bottom-right-radius:0!important}
+        .ah-modal .ah-row .ah-label{order:1;flex:1;display:flex!important;align-items:center!important;gap:7px!important;font-size:12.5px!important;font-weight:700!important;color:var(--tx)!important;white-space:nowrap}
+        .ah-modal .ah-label-ico{width:16px!important;height:16px!important;object-fit:contain;image-rendering:pixelated}
+        .ah-modal .ah-row .ah-hint{display:none!important}
+        .ah-modal .ah-row:not(.on) .ah-label{color:var(--dim)!important}
+
+        .ah-modal .ah-row input[type=checkbox]{order:2;flex:none;-webkit-appearance:none;appearance:none;margin:0!important;position:relative;
+          width:28px;height:16px;border-radius:8px;background:#22313e;border:none;cursor:pointer;transition:background .15s}
+        .ah-modal .ah-row input[type=checkbox]::after{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#8093a4;transition:transform .15s,background .15s}
+        .ah-modal .ah-row input[type=checkbox]:checked{background:var(--on)}
+        .ah-modal .ah-row input[type=checkbox]:checked::after{transform:translateX(12px);background:#0c1f14}
+
+        .ah-modal .ah-sub{margin:-6px 0 0!important;padding:7px 10px 8px!important;background:#0a1117!important;border:1px solid var(--line)!important;border-top:none!important;
+          border-radius:0 0 8px 8px!important;display:flex!important;flex-direction:column!important;gap:6px!important;transition:opacity .15s}
+        .ah-modal .ah-row:not(.on) + .ah-sub{opacity:.4}
+        .ah-modal .ah-sub:not(.ah-row + .ah-sub){margin-top:0!important;border-top:1px solid var(--line)!important;border-radius:8px!important}
+
+        .ah-modal .ah-field{display:flex!important;align-items:center!important;justify-content:space-between!important;gap:8px!important;margin:0!important;font-size:11px!important;color:var(--dim)!important}
+        .ah-modal .ah-field-col{flex-direction:column!important;align-items:stretch!important;gap:5px!important}
+        .ah-modal .ah-field > span{color:var(--dim)!important;font-size:10px!important;font-weight:700!important;letter-spacing:.06em!important;text-transform:uppercase!important;white-space:nowrap}
+        .ah-modal .ah-field .ah-hint{font-size:10px!important;color:#5c7082!important;margin:0!important}
+
+        .ah-modal .ah-sel,.ah-modal .ah-input{height:26px!important;padding:0 8px!important;border-radius:6px!important;background:var(--panel)!important;border:1px solid var(--line)!important;
+          color:var(--tx)!important;font-size:11.5px!important;outline:none!important;box-shadow:none!important}
+        .ah-modal .ah-sel{flex:1;max-width:160px;min-width:0;cursor:pointer}
+        .ah-modal .ah-sel:focus,.ah-modal .ah-input:focus{border-color:#35526a!important}
+        .ah-modal .ah-input::placeholder{color:#4f6273}
+
+        .ah-modal .ah-balls{display:grid!important;grid-template-columns:repeat(4,1fr)!important;gap:4px!important;margin:0!important}
+        .ah-modal .cap-chip{all:unset;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;height:44px;border-radius:7px;
+          background:var(--row);border:1px solid var(--line);color:var(--dim);font-size:10.5px;font-weight:700;font-variant-numeric:tabular-nums}
+        .ah-modal .cap-chip:hover{border-color:#2c4658;color:var(--tx)}
+        .ah-modal .cap-chip.on{background:var(--row2);border-color:#4a6a82;color:var(--tx)}
+        .ah-modal .cap-chip-ico{width:24px!important;height:24px!important;object-fit:contain;image-rendering:pixelated}
+        .ah-modal .cap-chip-ico[src*="idleball"]{width:18px!important;height:18px!important;margin:3px 0!important}
+
+        .ah-modal .ah-warn{margin:-6px 0 0!important;padding:5px 10px!important;border:1px solid var(--line)!important;border-top:none!important;border-radius:0 0 8px 8px!important;
+          background:rgba(239,106,106,.08)!important;color:#f0a0a0!important;font-size:10.5px!important}
+      `;
+      (document.head || document.documentElement).appendChild(st);
+
+      // Botão do Auto-Helper arrastável (posição salva). Clique curto continua abrindo.
+      // Move só o botão com "translate", sem tirar ele do lugar no layout do jogo.
+      const KEY = 'ahOff';
+      let moved = false;
+
+      const getOff = () => {
+        try {
+          return ls.get(KEY, null) || { x: 0, y: 0 };
+        } catch (e) {
+          return { x: 0, y: 0 };
+        }
+      };
+
+      const setOff = (head, o) => {
+        head.style.translate = o.x + 'px ' + o.y + 'px';
+      };
+
+      document.addEventListener(
+        'pointerdown',
+        (e) => {
+          const head = e.button === 0 && e.target.closest && e.target.closest('.ah-head');
+
+          if (!head || !head.closest('.ah-panel')) return;
+
+          const tr = (head.style.translate || '').match(/-?[\d.]+/g);
+          const start = tr ? { x: +tr[0] || 0, y: +tr[1] || 0 } : getOff();
+          const r = head.getBoundingClientRect();
+          const base = { l: r.left - start.x, t: r.top - start.y };
+          const sx = e.clientX;
+          const sy = e.clientY;
+          let cur = start;
+
+          moved = false;
+
+          const mv = (ev) => {
+            if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) return;
+
+            moved = true;
+            head.style.cursor = 'grabbing';
+
+            const x = Math.max(-base.l, Math.min(innerWidth - r.width - base.l, start.x + ev.clientX - sx));
+            const y = Math.max(-base.t, Math.min(innerHeight - r.height - base.t, start.y + ev.clientY - sy));
+
+            cur = { x: Math.round(x), y: Math.round(y) };
+            setOff(head, cur);
+
+            try {
+              ls.set(KEY, cur);
+            } catch (err) {}
+          };
+          const up = () => {
+            removeEventListener('pointermove', mv, true);
+            removeEventListener('pointerup', up, true);
+            removeEventListener('pointercancel', up, true);
+            head.style.cursor = '';
+          };
+
+          addEventListener('pointermove', mv, true);
+          addEventListener('pointerup', up, true);
+          addEventListener('pointercancel', up, true);
+        },
+        true
+      );
+
+      // Impede o "arrastar nativo" do navegador (imagem/texto), que cancelava o arraste.
+      document.addEventListener(
+        'dragstart',
+        (e) => {
+          if (e.target.closest && e.target.closest('.ah-panel .ah-head')) e.preventDefault();
+        },
+        true
+      );
+
+      // Depois de arrastar, o clique que sobra não abre a janela.
+      document.addEventListener(
+        'click',
+        (e) => {
+          if (moved && e.target.closest && e.target.closest('.ah-panel .ah-head')) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            moved = false;
+          }
+        },
+        true
+      );
+
+      setInterval(() => {
+        const head = document.querySelector('.ah-panel .ah-head');
+
+        if (!head) return;
+
+        const saved = ls.get(KEY, null);
+
+        if (saved) {
+          if (!head.style.translate) setOff(head, saved);
+
+          return;
+        }
+
+        // Sem posição salva: se estiver embaixo do card do Daily Kill, empurra para a esquerda dele.
+        const dkEl = document.querySelector('#mtal-dk .dk-card, #pdk-root .pdk-card');
+        const tr = (head.style.translate || '').match(/-?[\d.]+/g);
+        const cur = { x: tr ? +tr[0] || 0 : 0, y: tr ? +tr[1] || 0 : 0 };
+        const r = head.getBoundingClientRect();
+        const nat = { l: r.left - cur.x, r: r.right - cur.x, t: r.top - cur.y, b: r.bottom - cur.y };
+        const d = dkEl && dkEl.getBoundingClientRect();
+        const hit = d && d.width && nat.l < d.right && nat.r > d.left && nat.t < d.bottom && nat.b > d.top;
+        const want = hit ? { x: Math.round(d.left - 12 - nat.r), y: 0 } : { x: 0, y: 0 };
+
+        if (want.x !== cur.x || want.y !== cur.y) setOff(head, want);
+      }, 1000);
+    })();
+
+    /* ---------- hunt analyzer (só visual) ---------- */
+
+    (() => {
+      const st = document.createElement('style');
+
+      st.textContent = `
+        .ha-window.ha-window{--bg:#0c141b;--panel:#101a23;--row:#121e28;--row2:#172633;--line:#1b2b38;--tx:#e3eaf1;--dim:#768a9c;--ok:#57d38c;--bad:#ef6a6a;--xp:#9ec9ff;--gold:#e8c46a;
+          width:320px!important;min-width:0!important;padding:0!important;background:var(--bg)!important;color:var(--tx)!important;
+          border:1px solid #223444!important;border-radius:12px!important;box-shadow:0 18px 50px rgba(0,0,0,.55)!important;overflow:hidden!important;
+          font:12px/1.3 Inter,Barlow,system-ui,sans-serif!important}
+        .ha-window.ha-window *{font-family:inherit!important;box-sizing:border-box}
+        .ha-window.ha-window::before,.ha-window.ha-window::after{display:none!important}
+
+        .ha-window.ha-window .ha-hex-bg,.ha-window.ha-window .ha-hex-rail,.ha-window.ha-window .ha-hex-cap,.ha-window.ha-window .ha-gem{display:none!important}
+        .ha-window.ha-window .ha-head{position:relative!important;display:flex!important;align-items:center!important;gap:6px!important;height:auto!important;min-height:0!important;
+          margin:0!important;padding:8px 8px 8px 12px!important;background:none!important;border:none!important;border-bottom:1px solid var(--line)!important;box-shadow:none!important;cursor:move}
+        .ha-window.ha-window .ha-title{flex:1 1 auto!important;min-width:0;position:static!important;transform:none!important;left:auto!important;right:auto!important;width:auto!important;
+          justify-content:flex-start!important;text-align:left!important;display:flex!important;align-items:center!important;gap:7px!important;margin:0!important;padding:0!important;
+          font-size:13px!important;font-weight:800!important;letter-spacing:.01em!important;text-transform:none!important;font-variant:normal!important;color:var(--tx)!important;text-shadow:none!important;background:none!important}
+        .ha-window.ha-window .ha-title-txt{color:var(--tx)!important;background:none!important;-webkit-text-fill-color:currentColor!important;text-shadow:none!important}
+        .ha-window.ha-window .ha-title-ico{width:14px!important;height:14px!important;margin:0!important;position:static!important}
+        .ha-window.ha-window .ha-head{justify-content:flex-start!important;text-align:left!important}
+        .ha-window.ha-window .ha-head .ha-title,.ha-window.ha-window .ha-head .ha-title-txt{margin:0!important;padding:0!important;left:auto!important;right:auto!important;transform:none!important}
+        .ha-window.ha-window .ha-head button{position:static!important;transform:none!important;top:auto!important;margin:0!important;translate:none!important;box-shadow:none!important}
+        .ha-window.ha-window .ha-clear,.ha-window.ha-window .ha-x,.ha-window.ha-window .ha-mode{all:unset;position:static!important;cursor:pointer;width:24px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center;
+          color:#b9c8d6;font-size:14px;filter:none;opacity:1;flex:none!important}
+        .ha-window.ha-window .ha-head > button:first-of-type{margin-left:auto!important}
+        .ha-window.ha-window .ha-x{font-size:18px}
+        .ha-window.ha-window .ha-mode svg{width:16px;height:16px}
+        .ha-window.ha-window .ha-mode{filter:none}
+        .ha-window.ha-window .ha-mode svg{pointer-events:none}
+        .ha-window.ha-window .ha-clear:hover,.ha-window.ha-window .ha-x:hover,.ha-window.ha-window .ha-mode:hover{background:var(--row2);color:var(--tx);opacity:1}
+        .ha-window.ha-window .ha-clear:hover{filter:none}
+
+        .ha-window.ha-window .ha-body{display:flex!important;flex-direction:column!important;gap:6px!important;padding:8px!important;background:none!important;max-height:none}
+        .ha-window.ha-window .ha-sub{margin:0!important;padding:0 2px!important;text-align:left!important;font-size:10px!important;font-weight:700!important;letter-spacing:.08em!important;text-transform:uppercase!important;color:var(--dim)!important}
+
+        .ha-window.ha-window .ha-grid{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important;gap:4px!important;margin:0!important}
+        .ha-window.ha-window .ha-card{min-width:0!important;display:flex!important;align-items:center!important;gap:8px!important;min-height:0!important;margin:0!important;padding:7px 8px!important;
+          background:var(--row)!important;border:1px solid var(--line)!important;border-radius:8px!important;box-shadow:none!important}
+        .ha-window.ha-window .ha-card-ico{flex:none;width:18px!important;height:18px!important;display:flex!important;align-items:center;justify-content:center;font-size:13px!important;
+          background:none!important;border:none!important;box-shadow:none!important;margin:0!important;padding:0!important;opacity:.85}
+        .ha-window.ha-window .ha-card-ico img,.ha-window.ha-window .ha-ball{width:16px!important;height:16px!important}
+        .ha-window.ha-window .ha-card > div{min-width:0;overflow:hidden;display:flex;flex-direction:column}
+        .ha-window.ha-window .ha-card b{font-size:13px!important;font-weight:700!important;color:var(--tx)!important;font-variant-numeric:tabular-nums;white-space:nowrap;text-shadow:none!important}
+        .ha-window.ha-window .ha-card small{font-size:10px!important;color:var(--dim)!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .ha-window.ha-window .ha-xp b{color:var(--xp)!important}
+        .ha-window.ha-window .ha-loot b{color:var(--ok)!important}
+        .ha-window.ha-window .ha-supply b{color:var(--bad)!important}
+        .ha-window.ha-window .ha-catch b{color:var(--gold)!important}
+
+        .ha-window.ha-window .ha-balance{display:flex!important;align-items:center!important;justify-content:space-between!important;gap:8px!important;margin:0!important;padding:8px 10px!important;
+          background:var(--row)!important;border:1px solid var(--line)!important;border-radius:8px!important;box-shadow:none!important}
+        .ha-window.ha-window .ha-balance span{white-space:nowrap;font-size:10.5px!important;color:var(--dim)!important;font-weight:600!important}
+        .ha-window.ha-window .ha-balance b{font-size:15px!important;font-weight:800!important;font-variant-numeric:tabular-nums;text-shadow:none!important}
+        .ha-window.ha-window .ha-balance.pos b{color:var(--ok)!important}
+        .ha-window.ha-window .ha-balance.neg b,.ha-window.ha-window .ha-balance:not(.pos) b{color:var(--bad)!important}
+        .ha-window.ha-window .ha-balance.pos{background:linear-gradient(90deg,rgba(87,211,140,.08),transparent)!important}
+
+        .ha-window.ha-window .ha-rates{display:flex!important;gap:4px!important;margin:0!important}
+        .ha-window.ha-window .ha-rate{flex:1 1 auto;display:flex!important;align-items:center!important;justify-content:center!important;gap:4px;height:24px;padding:0 6px!important;margin:0!important;
+          background:var(--row)!important;border:1px solid var(--line)!important;border-radius:6px!important;font-size:10.5px!important;font-weight:700!important;color:var(--dim)!important;
+          white-space:nowrap;overflow:hidden;font-variant-numeric:tabular-nums;box-shadow:none!important}
+        .ha-window.ha-window .ha-rate.pos{color:var(--ok)!important}
+        .ha-window.ha-window .ha-rate.neg{color:var(--bad)!important}
+        .ha-window.ha-window .ha-rate.xp{color:var(--xp)!important}
+
+        .ha-window.ha-window .ha-market-toggle{display:flex!important;align-items:center!important;gap:8px!important;margin:0!important;padding:2px 2px!important;cursor:pointer;font-size:11px!important;color:var(--dim)!important}
+        .ha-window.ha-window .ha-market-toggle input{-webkit-appearance:none;appearance:none;flex:none;margin:0!important;position:relative;width:26px;height:14px;border-radius:7px;background:#22313e;cursor:pointer;transition:background .15s}
+        .ha-window.ha-window .ha-market-toggle input::after{content:'';position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:#8093a4;transition:transform .15s,background .15s}
+        .ha-window.ha-window .ha-market-toggle input:checked{background:var(--ok)}
+        .ha-window.ha-window .ha-market-toggle input:checked::after{transform:translateX(12px);background:#0c1f14}
+
+        .ha-window.ha-window .ha-drops-head{margin:4px 0 0!important;padding:0 2px!important;border:none!important;background:none!important;font-size:10px!important;font-weight:700!important;
+          letter-spacing:.08em!important;text-transform:uppercase!important;color:var(--dim)!important;text-shadow:none!important}
+        .ha-window.ha-window .ha-drops-head::before,.ha-window.ha-window .ha-drops-head::after{display:none!important}
+        .ha-window.ha-window .ha-drops{display:flex!important;flex-direction:column!important;margin:0!important;padding:0!important;background:var(--row)!important;border:1px solid var(--line)!important;
+          border-radius:8px!important;max-height:180px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#253a4b transparent;box-shadow:none!important}
+        .ha-window.ha-window .ha-drop{display:grid!important;grid-template-columns:20px minmax(0,1fr) auto auto!important;align-items:center!important;gap:8px!important;margin:0!important;padding:5px 8px!important;
+          border:none!important;border-bottom:1px solid var(--line)!important;background:none!important}
+        .ha-window.ha-window .ha-drop:last-child{border-bottom:none!important}
+        .ha-window.ha-window .ha-drop-ico{width:20px!important;height:20px!important;display:flex;align-items:center;justify-content:center;background:none!important;border:none!important}
+        .ha-window.ha-window .ha-drop-ico img{max-width:20px!important;max-height:20px!important;image-rendering:pixelated}
+        .ha-window.ha-window .ha-drop-name{font-size:11.5px!important;font-weight:600!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .ha-window.ha-window .ha-drop-qty{font-size:11px!important;color:var(--dim)!important;font-variant-numeric:tabular-nums}
+        .ha-window.ha-window .ha-drop-gold{min-width:52px;text-align:right;font-size:11.5px!important;font-weight:700!important;color:var(--ok)!important;font-variant-numeric:tabular-nums}
+
+        .ha-window.ha-window .ha-clog-btn{all:unset;cursor:pointer;display:flex;align-items:center;justify-content:center;height:28px;border-radius:7px;
+          background:var(--row);border:1px solid var(--line);color:var(--tx);font-size:11.5px;font-weight:600;text-transform:none;letter-spacing:0}
+        .ha-window.ha-window .ha-clog-btn:hover{background:var(--row2);border-color:#2c4658}
+        .ha-window.ha-window .ha-note{margin:0!important;padding:0 2px!important;text-align:left!important;font-size:10px!important;color:#5c7082!important}
+
+        /* ----- modo barra (topo da tela) ----- */
+        .ha-window.ha-window.ha-bar{inset:6px auto auto 50%!important;transform:translateX(-50%)!important;width:auto!important;max-width:96vw!important;height:34px!important;
+          display:flex!important;flex-direction:row!important;align-items:stretch!important;overflow:visible!important;border-radius:10px!important}
+        .ha-window.ha-window.ha-bar .ha-head{order:2;flex:none!important;width:auto!important;min-width:0!important;padding:0 4px!important;border:none!important;border-left:1px solid var(--line)!important;cursor:default}
+        .ha-window.ha-window.ha-bar .ha-title{display:none!important}
+        .ha-window.ha-window.ha-bar .ha-clear,.ha-window.ha-window.ha-bar .ha-x,.ha-window.ha-window.ha-bar .ha-mode{width:22px;height:22px;align-self:center}
+        .ha-window.ha-window.ha-bar .win-grip{display:none!important}
+        .ha-window.ha-window.ha-bar .ha-body{order:1;position:static!important;overflow:visible!important;max-height:none!important;flex-direction:row!important;align-items:center!important;gap:12px!important;padding:0 10px!important;white-space:nowrap}
+        .ha-window.ha-window.ha-bar .ha-sub,.ha-window.ha-window.ha-bar .ha-market-toggle,.ha-window.ha-window.ha-bar .ha-note,.ha-window.ha-window.ha-bar .ha-clog-btn{display:none!important}
+        .ha-window.ha-window.ha-bar .ha-grid{display:flex!important;gap:12px!important}
+        .ha-window.ha-window.ha-bar .ha-card{padding:0!important;background:none!important;border:none!important;gap:5px!important}
+        .ha-window.ha-window.ha-bar .ha-card small{display:none!important}
+        .ha-window.ha-window.ha-bar .ha-card b{font-size:12px!important}
+        .ha-window.ha-window.ha-bar .ha-card-ico{width:14px!important;height:14px!important;font-size:11px!important}
+        .ha-window.ha-window.ha-bar .ha-card-ico img,.ha-window.ha-window.ha-bar .ha-ball{width:13px!important;height:13px!important}
+        .ha-window.ha-window.ha-bar .ha-balance{padding:0 0 0 12px!important;background:none!important;border:none!important;border-left:1px solid var(--line)!important;border-radius:0!important;height:18px}
+        .ha-window.ha-window.ha-bar .ha-balance span{display:none!important}
+        .ha-window.ha-window.ha-bar .ha-balance b{font-size:13px!important}
+        .ha-window.ha-window.ha-bar .ha-rates{gap:10px!important}
+        .ha-window.ha-window.ha-bar .ha-rate{height:auto;padding:0!important;background:none!important;border:none!important;font-size:11px!important}
+        .ha-window.ha-window.ha-bar .ha-drops-head{align-self:stretch;display:flex!important;align-items:center;margin:0!important;padding:0 0 0 12px!important;border-left:1px solid var(--line)!important;
+          cursor:default;color:var(--tx)!important;font-size:0!important;letter-spacing:0!important}
+        .ha-window.ha-window.ha-bar .ha-drops-head::before{content:'🎒 Drops'!important;display:inline!important;font-size:11px;font-weight:700;text-transform:none;letter-spacing:0;color:var(--tx)}
+        .ha-window.ha-window.ha-bar .ha-drops{display:none!important;position:absolute!important;top:100%!important;right:0!important;left:auto!important;z-index:50!important;margin:4px 0 0!important;width:300px;max-height:320px;
+          background:var(--bg)!important;border:1px solid #223444!important;box-shadow:0 14px 40px rgba(0,0,0,.55)!important}
+        .ha-window.ha-window.ha-bar .ha-drops-head:hover + .ha-drops,.ha-window.ha-window.ha-bar .ha-drops:hover{display:flex!important}
+        /* "Nenhum drop ainda": vira a mesma caixinha flutuante */
+        .ha-window.ha-window.ha-bar .ha-drops-head + :not(.ha-drops){display:none!important;position:absolute!important;top:100%!important;right:0!important;left:auto!important;z-index:50!important;
+          margin:4px 0 0!important;padding:10px 12px!important;width:260px;white-space:normal;background:var(--bg)!important;border:1px solid #223444!important;border-radius:8px!important;
+          box-shadow:0 14px 40px rgba(0,0,0,.55)!important;color:var(--dim)!important;font-size:11.5px!important;text-align:left!important}
+        .ha-window.ha-window.ha-bar .ha-drops-head:hover + :not(.ha-drops){display:block!important}
+        .ha-window.ha-window.ha-bar .ha-drops::before{content:'';position:absolute;left:0;right:0;top:-8px;height:8px}
+        .ha-window.ha-window.ha-bar .ha-drops{overflow-y:auto!important}
+      `;
+      (document.head || document.documentElement).appendChild(st);
+
+      // Botão para alternar janela ↔ barra no topo (preferência salva).
+      const KEY = 'haBar';
+      const ICON_BAR = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M3 14h18M3 19h12"/></svg>';
+      const ICON_WIN = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9h16"/></svg>';
+      const isBar = () => ls.get(KEY, '0') === '1';
+
+      const sync = () => {
+        const w = document.querySelector('.ha-window');
+
+        if (!w) return;
+
+        const head = w.querySelector('.ha-head');
+        let btn = head && head.querySelector('.ha-mode');
+
+        if (head && !btn) {
+          btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'ha-mode';
+          btn.dataset.nodrag = 'true';
+          head.insertBefore(btn, head.querySelector('.ha-clear') || head.querySelector('.ha-x'));
+        }
+
+        const bar = isBar();
+
+        w.classList.toggle('ha-bar', bar);
+
+        // Tooltips (title) em cada informação.
+        const tip = (el, t) => {
+          if (el && t && el.title !== t) el.title = t;
+        };
+
+        w.querySelectorAll('.ha-card').forEach((c) => {
+          const sm = c.querySelector('small');
+
+          tip(c, sm && sm.textContent.trim());
+        });
+        tip(w.querySelector('.ha-balance'), 'Saldo da sessão (Loot + Capturas − Supply)');
+        w.querySelectorAll('.ha-rate').forEach((r) =>
+          tip(r, r.classList.contains('xp') ? 'XP por hora' : /\$/.test(r.textContent) ? 'Saldo por hora' : 'Derrotados por hora')
+        );
+
+        if (btn && btn.dataset.m !== String(bar)) {
+          btn.dataset.m = String(bar);
+          btn.innerHTML = bar ? ICON_WIN : ICON_BAR;
+          btn.title = bar ? 'Voltar para janela' : 'Modo barra no topo';
+        }
+      };
+
+      // O clique é tratado no window (fase de captura), antes de qualquer listener do jogo,
+      // porque o arrastar da janela do jogo consome o ponteiro no cabeçalho.
+      const hit = (e) => e.target && e.target.closest && e.target.closest('.ha-window .ha-mode');
+
+      window.addEventListener(
+        'pointerdown',
+        (e) => {
+          if (!hit(e) || e.button !== 0) return;
+
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          ls.set(KEY, isBar() ? '0' : '1');
+          sync();
+        },
+        true
+      );
+
+      ['mousedown', 'mouseup', 'pointerup', 'click'].forEach((t) =>
+        window.addEventListener(
+          t,
+          (e) => {
+            if (hit(e)) e.stopImmediatePropagation();
+          },
+          true
+        )
+      );
+
+      setInterval(sync, 400);
+    })();
+
+    /* ---------- log de capturas (visual + sprites animados) ---------- */
+
+    (() => {
+      const st = document.createElement('style');
+
+      st.textContent = `
+        .clog-window.clog-window.clog-window{--bg:#0c141b;--panel:#101a23;--row:#121e28;--row2:#172633;--line:#1b2b38;--tx:#e3eaf1;--dim:#768a9c;--ok:#57d38c;--bad:#ef6a6a;
+          width:560px!important;max-width:96vw!important;max-height:86vh!important;display:flex!important;flex-direction:column!important;padding:0!important;
+          background:var(--bg)!important;color:var(--tx)!important;border:1px solid #223444!important;border-radius:12px!important;box-shadow:0 18px 50px rgba(0,0,0,.55)!important;
+          overflow:hidden!important;font:12px/1.3 Inter,Barlow,system-ui,sans-serif!important}
+        .clog-window.clog-window.clog-window *{font-family:inherit!important;box-sizing:border-box}
+        .clog-window.clog-window.clog-window::before,.clog-window.clog-window.clog-window::after{display:none!important}
+
+        .clog-window.clog-window.clog-window .clog-hex-bg,.clog-window.clog-window.clog-window .clog-hex-rail,.clog-window.clog-window.clog-window .clog-hex-cap,.clog-window.clog-window.clog-window .clog-gem{display:none!important}
+        .clog-window.clog-window.clog-window .clog-title{position:relative!important;inset:auto!important;transform:none!important;display:flex!important;align-items:center!important;justify-content:flex-start!important;gap:6px!important;
+          width:auto!important;max-width:none!important;align-self:stretch!important;flex:none!important;overflow:visible!important;
+          height:auto!important;min-height:40px!important;margin:0!important;padding:8px 8px 8px 12px!important;background:none!important;border:none!important;
+          border-bottom:1px solid var(--line)!important;box-shadow:none!important;cursor:move}
+        .clog-window.clog-window.clog-window .clog-titletxt{flex:1 1 auto!important;position:static!important;transform:none!important;display:flex!important;align-items:center!important;
+          justify-content:flex-start!important;gap:7px!important;margin:0!important;padding:0!important;text-align:left!important;font-size:13px!important;font-weight:800!important;
+          letter-spacing:.01em!important;text-transform:none!important;font-variant:normal!important;color:var(--tx)!important;text-shadow:none!important;background:none!important}
+        .clog-window.clog-window.clog-window .clog-titletxt-t{color:var(--tx)!important;-webkit-text-fill-color:currentColor!important;background:none!important;text-shadow:none!important}
+        .clog-window.clog-window.clog-window .clog-title-ico{width:14px!important;height:14px!important;margin:0!important}
+        .clog-window.clog-window.clog-window .clog-x{all:unset;position:static!important;transform:none!important;flex:none;cursor:pointer;width:24px;height:24px;border-radius:6px;
+          display:flex;align-items:center;justify-content:center;color:#b9c8d6;font-size:18px;margin:0 0 0 auto!important;inset:auto!important}
+        .clog-window.clog-window.clog-window .clog-x:hover{background:var(--row2);color:var(--tx)}
+
+        .clog-window.clog-window.clog-window .clog-head{position:static!important;inset:auto!important;display:flex!important;align-items:center!important;justify-content:space-between!important;gap:10px!important;margin:0!important;
+          padding:8px 12px!important;background:none!important;border:none!important;border-bottom:1px solid var(--line)!important}
+        .clog-window.clog-window.clog-window .clog-totals{display:flex!important;gap:12px!important;font-size:11px!important;color:var(--dim)!important;margin:0!important}
+        .clog-window.clog-window.clog-window .clog-totals b{color:var(--tx)!important;font-weight:700!important;font-variant-numeric:tabular-nums}
+        .clog-window.clog-window.clog-window .clog-t-shiny b{color:#f0c661!important}
+        .clog-window.clog-window.clog-window .clog-tabs{display:flex!important;gap:2px!important;padding:3px!important;margin:0!important;background:#081017!important;border:1px solid var(--line)!important;border-radius:9px!important}
+        .clog-window.clog-window.clog-window .clog-tab{all:unset;cursor:pointer;padding:5px 10px;border-radius:6px;font-size:11px;font-weight:600;color:var(--dim)}
+        .clog-window.clog-window.clog-window .clog-tab:hover{color:var(--tx)}
+        .clog-window.clog-window.clog-window .clog-tab.on{background:var(--row2);color:var(--tx);box-shadow:inset 0 0 0 1px #2a4052}
+
+        .clog-window.clog-window.clog-window .clog-list{flex:1;min-height:0;overflow-y:auto!important;margin:0!important;padding:0!important;background:none!important;border:none!important;
+          display:block!important;scrollbar-width:thin;scrollbar-color:#253a4b transparent}
+        .clog-window.clog-window.clog-window .clog-row{display:grid!important;grid-template-columns:44px minmax(0,1fr) minmax(0,1.5fr) 74px 78px!important;align-items:center!important;column-gap:8px!important;
+          min-height:46px!important;margin:0!important;padding:2px 12px!important;background:none!important;border:none!important;border-bottom:1px solid var(--line)!important;border-radius:0!important;box-shadow:none!important}
+        .clog-window.clog-window.clog-window .clog-row:hover{background:var(--row)!important}
+        .clog-window.clog-window.clog-window .clog-ico{width:44px!important;height:44px!important;display:flex!important;align-items:center!important;justify-content:center!important;background:none!important;border:none!important}
+        .clog-window.clog-window.clog-window .clog-ico img{width:auto!important;height:auto!important;max-width:44px!important;max-height:44px!important;object-fit:contain!important;image-rendering:pixelated}
+        .clog-window.clog-window.clog-window .clog-name{font-size:13px!important;font-weight:700!important;color:var(--tx)!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .clog-window.clog-window.clog-window .clog-lvl{display:none!important}
+        .clog-window.clog-window.clog-window .clog-meta{font-size:11px!important;color:var(--dim)!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .clog-window.clog-window.clog-window .clog-meta b{font-weight:700!important}
+        .clog-window.clog-window.clog-window .clog-ball{font-size:11px!important;color:var(--dim)!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .clog-window.clog-window.clog-window .clog-when{font-size:10.5px!important;color:#5c7082!important;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+
+        .clog-window.clog-window.clog-window .clog-list ~ *{margin:0!important;padding:8px 12px!important;background:none!important;border:none!important;border-top:1px solid var(--line)!important;
+          display:flex!important;align-items:center!important;justify-content:space-between!important;gap:10px!important;font-size:10.5px!important;color:#5c7082!important}
+        .clog-window.clog-window.clog-window .clog-list ~ * *{border:none!important}
+        .clog-window.clog-window.clog-window .clog-list ~ * button{all:unset;cursor:pointer;flex:none;padding:5px 10px;border-radius:6px;font-size:11px;font-weight:600;
+          color:#f0a0a0;background:rgba(239,106,106,.08);border:1px solid rgba(239,106,106,.25)!important}
+        .clog-window.clog-window.clog-window .clog-list ~ * button:hover{background:rgba(239,106,106,.16)}
+        .clog-window.clog-window.clog-window .win-grip{border:none!important}
+      `;
+      (document.head || document.documentElement).appendChild(st);
+
+      // Troca o ícone do jogo pelo sprite animado (o mesmo da janela de Hunts).
+      setInterval(() => {
+        if (!data.cre) return;
+
+        document.querySelectorAll('.clog-window .clog-row').forEach((row) => {
+          const img = row.querySelector('.clog-ico img');
+          const nm = row.querySelector('.clog-name');
+
+          if (!img || !nm) return;
+
+          const name = nm.textContent.trim();
+
+          if (img.dataset.hlName === name) return;
+
+          img.dataset.hlName = name;
+
+          const c = data.cre.byName.get(norm(name.replace(/^✨\s*/, '')));
+          const pid = c ? spriteId(c, name) : 0;
+
+          if (!pid) return;
+
+          const cur = img.getAttribute('src') || '';
+          const orig = cur.includes('PokeAPI') ? img.dataset.hlOrig : cur;
+          const sh = /shiny|✨/i.test(name) || row.classList.contains('shiny') || /shiny/i.test(row.className) ? 'shiny/' : '';
+          const still = SPR + '/' + sh + pid + '.png';
+
+          img.dataset.hlOrig = orig;
+          delete img.dataset.hlStill;
+          img.onerror = () => {
+            if (img.src !== still && !img.dataset.hlStill) {
+              img.dataset.hlStill = '1';
+              img.src = still;
+            } else {
+              img.onerror = null;
+              img.src = orig;
+            }
+          };
+          img.removeAttribute('width');
+          img.removeAttribute('height');
+          img.src = SPR + '/versions/generation-v/black-white/animated/' + sh + pid + '.gif';
+        });
+      }, 500);
+    })();
+
+    /* ---------- barra de capturas (abaixo da barra do Hunt Analyzer) ---------- */
+
+    (() => {
+      const Q_COLOR = {
+        fraca: '#9aa6b3',
+        comum: '#63d873',
+        incomum: '#7fd4ff',
+        rara: '#b06cff',
+        epica: '#d985ff',
+        lendaria: '#ff8c3c',
+        mitica: '#ff6680',
+        ancia: '#ff9800',
+        divina: '#00bcd4'
+      };
+      const Q_STEPS = [
+        [1.0, 'Fraca'],
+        [1.1, 'Comum'],
+        [1.3, 'Incomum'],
+        [1.5, 'Rara'],
+        [1.7, 'Épica'],
+        [2.0, 'Lendária'],
+        [3.0, 'Mítica'],
+        [4.0, 'Anciã'],
+        [Infinity, 'Divina']
+      ];
+
+      const st = document.createElement('style');
+
+      st.textContent = `
+        #hl-cbar{--bg:#0c141b;--line:#1b2b38;--tx:#e3eaf1;--dim:#768a9c;position:fixed;left:50%;transform:translateX(-50%);z-index:2147483000;display:none;align-items:center;gap:12px;
+          height:26px;padding:0 4px 0 12px;background:var(--bg);color:var(--tx);border:1px solid #223444;border-radius:9px;box-shadow:0 10px 30px rgba(0,0,0,.45);
+          font:12px/1 Inter,Barlow,system-ui,sans-serif;white-space:nowrap;font-variant-numeric:tabular-nums}
+        #hl-cbar.on{display:flex}
+        #hl-cbar .i{display:flex;align-items:center;gap:5px;font-weight:700}
+        #hl-cbar .i small{font-size:11px;font-weight:600;color:var(--dim)}
+        #hl-cbar .sep{width:1px;height:16px;background:var(--line)}
+        #hl-cbar .sh b{color:#f0c661}
+        #hl-cbar .best b{font-weight:800}
+        #hl-cbar .dim{color:var(--dim);font-weight:600}
+        #hl-cbar .val{color:#57d38c;font-weight:700}
+        #hl-cbar .clr{all:unset;cursor:pointer;display:flex;align-items:center;justify-content:center;height:20px;min-width:20px;padding:0 4px;border-radius:6px;
+          color:#b9c8d6;font-size:12px;font-weight:700}
+        #hl-cbar .clr:hover{background:#172633;color:#ef6a6a}
+        #hl-cbar .clr.arm{background:rgba(239,106,106,.15);color:#ef6a6a;padding:0 8px;font-size:11px}
+      `;
+      (document.head || document.documentElement).appendChild(st);
+
+      const bar = document.createElement('div');
+
+      bar.id = 'hl-cbar';
+
+      const qInfo = (r) => {
+        const lbl = [r.qualityLabel, r.qualityName, r.tierName, r.rarityLabel, r.tier, r.rarity].find((x) => typeof x === 'string' && x.trim());
+        const q = Number(r.quality ?? r.qualityMult ?? r.mult);
+        const label = lbl || (Number.isFinite(q) ? Q_STEPS.find(([max]) => q < max)[1] : '');
+
+        return { q: Number.isFinite(q) ? q : null, label, color: Q_COLOR[norm(label)] || '#e3eaf1' };
+      };
+
+      const ivOf = (r) => {
+        for (const v of [r.ivTotal, r.totalIv, r.iv, r.growth, r.ivs]) {
+          if (Number.isFinite(Number(v))) return Number(v);
+
+          if (v && typeof v === 'object') {
+            const t = Object.values(v).reduce((a, x) => a + (Number(x) || 0), 0);
+
+            if (t > 0) return t;
+          }
+        }
+
+        return null;
+      };
+
+      const nameOf = (r) => {
+        const n = r.name || r.pokemonName || r.speciesName || (r.pokemon && r.pokemon.name) || (r.species && r.species.name);
+
+        if (n) return n;
+
+        const c = data.cre && data.cre.byId.get(+(r.speciesId ?? r.pokeId));
+
+        return c ? c.name : '?';
+      };
+
+      let info = null;
+      let armed = false;
+      let armT = 0;
+      let loading = false;
+      let lastLoad = 0;
+
+      async function load() {
+        if (loading) return;
+
+        loading = true;
+        lastLoad = Date.now();
+
+        try {
+          const d = await authGet('/api/game/capture-log?filter=all');
+          const rows = (Array.isArray(d) ? d : d && (d.rows || d.captures || d.list || d.items)) || [];
+          const tt = (d && (d.totals || d.counts)) || {};
+          const total = +(d.total ?? tt.total ?? tt.all ?? rows.length) || 0;
+          const shiny = +(d.shinyCount ?? d.shiny ?? tt.shiny ?? rows.filter((r) => r && r.shiny).length) || 0;
+          let best = null;
+
+          rows.forEach((r) => {
+            if (!r) return;
+
+            const q = qInfo(r);
+            const iv = ivOf(r);
+            const score = [(q.q ?? Q_STEPS.findIndex(([, l]) => norm(l) === norm(q.label))) || 0, iv || 0];
+
+            if (!best || score[0] > best.score[0] || (score[0] === best.score[0] && score[1] > best.score[1])) {
+              const c = data.cre && (data.cre.byId.get(+(r.speciesId ?? r.pokeId)) || data.cre.byName.get(norm(nameOf(r))));
+              const val = Number(r.sellValue ?? r.value ?? r.price ?? r.npcPrice) || (c ? Number(c.sellValue || c.priceNpc) || 0 : 0);
+
+              best = { score, q, iv, name: nameOf(r), shiny: !!r.shiny, val };
+            }
+          });
+
+          info = { total, shiny, normal: +(d.normalCount ?? tt.normal ?? tt.normais ?? total - shiny) || 0, best };
+        } catch (e) {
+          info = info || null;
+        }
+
+        loading = false;
+        paint();
+      }
+
+      function paint() {
+        if (!info) {
+          bar.innerHTML = '<span class="dim">Carregando capturas…</span>';
+
+          return;
+        }
+
+        const b = info.best;
+
+        bar.innerHTML = `
+          <span class="i" title="Total de capturas"><small>Total</small> ${fmt(info.total)}</span>
+          <span class="i sh" title="Capturas shiny">✨ <b>${fmt(info.shiny)}</b></span>
+          <span class="i" title="Capturas normais"><small>Normais</small> ${fmt(info.normal)}</span>
+          <span class="sep"></span>
+          ${
+            b
+              ? `<span class="i best" title="Melhor captura (qualidade e depois IV)">🏆 <b style="color:${b.q.color}">${b.shiny ? '✨ ' : ''}${esc(b.name)}</b>
+                  ${b.iv != null ? `<small>IV ${b.iv}/192</small>` : ''}
+                  ${b.q.label ? `<b style="color:${b.q.color}">${esc(b.q.label)}${b.q.q != null ? ` <small>×${b.q.q.toFixed(2)}</small>` : ''}</b>` : ''}
+                  ${b.val ? `<span class="val" title="Valor de venda">$ ${fmt(b.val)}</span>` : ''}</span>`
+              : '<span class="dim">Nenhuma captura ainda</span>'
+          }
+          <span class="sep"></span>
+          <button type="button" class="clr${armed ? ' arm' : ''}" title="Limpar histórico de capturas">${armed ? 'Confirmar?' : '🗑'}</button>`;
+      }
+
+      // Limpar histórico: usa o próprio botão "Limpar histórico" do Log de Capturas do jogo.
+      const findClear = () => [...document.querySelectorAll('.clog-window button')].find((b) => /limpar hist/i.test(b.textContent));
+
+      async function clearLog() {
+        let btn = findClear();
+        const opened = !btn;
+
+        if (!btn) {
+          const open = document.querySelector('.ha-window .ha-clog-btn');
+
+          if (open) open.click();
+
+          for (let i = 0; i < 30 && !btn; i++) {
+            await sleep(100);
+            btn = findClear();
+          }
+        }
+
+        if (!btn) {
+          toast('Não achei o botão "Limpar histórico" do jogo.');
+
+          return;
+        }
+
+        btn.click();
+
+        // Se a janela do Log foi aberta só para limpar, fecha de novo.
+        if (opened) {
+          await sleep(600);
+
+          const x = document.querySelector('.clog-window .clog-x');
+
+          if (x) x.click();
+        }
+
+        setTimeout(load, 1500);
+        setTimeout(load, 5000);
+      }
+
+      bar.addEventListener('click', (e) => {
+        if (!e.target.closest('.clr')) return;
+
+        if (!armed) {
+          armed = true;
+          paint();
+          clearTimeout(armT);
+          armT = setTimeout(() => {
+            armed = false;
+            paint();
+          }, 3000);
+
+          return;
+        }
+
+        armed = false;
+        clearTimeout(armT);
+        paint();
+        clearLog();
+      });
+
+      setInterval(() => {
+        const ha = document.querySelector('.ha-window.ha-bar');
+
+        if (!bar.isConnected && document.body) document.body.appendChild(bar);
+
+        if (!ha) {
+          bar.classList.remove('on');
+
+          return;
+        }
+
+        bar.style.top = Math.round(ha.getBoundingClientRect().bottom + 3) + 'px';
+
+        if (!bar.classList.contains('on')) {
+          bar.classList.add('on');
+          paint();
+        }
+
+        if (Date.now() - lastLoad > 20000) load();
+      }, 500);
+    })();
+
+    /* ---------- promo "Pacotes Fundadores" bloqueado ---------- */
+
+    (() => {
+      const st = document.createElement('style');
+
+      st.textContent = '.promo-overlay{display:none!important}';
+      (document.head || document.documentElement).appendChild(st);
+
+      // Além de esconder, fecha pelo botão "Fechar" do próprio popup (o jogo não fica "preso" nele).
+      setInterval(() => {
+        const ov = document.querySelector('.promo-overlay');
+        const b = ov && [...ov.querySelectorAll('button')].find((x) => /^\s*fechar\s*$/i.test(x.textContent));
+
+        if (b) b.click();
+      }, 1000);
+    })();
+
+    /* ---------- hunt analyzer sempre aberto ---------- */
+
+    (() => {
+      // Abre o Hunt Analyzer sozinho. Se você fechar pelo ×, respeita até recarregar a página.
+      let userClosed = false;
+
+      document.addEventListener(
+        'click',
+        (e) => {
+          if (e.isTrusted && e.target.closest && e.target.closest('.ha-window .ha-x')) userClosed = true;
+        },
+        true
+      );
+
+      const opener = () =>
+        document.querySelector('[data-guide*="analyzer" i], [data-guide*="analytics" i]') ||
+        [...document.querySelectorAll('button, [role="button"]')].find(
+          (b) => !b.closest('.ha-window, #hl-win, .hlm-overlay, #hl-cbar') && /hunt\s*analy[sz]er|analisador/i.test((b.title || '') + ' ' + (b.getAttribute('aria-label') || '') + ' ' + b.textContent)
+        );
+
+      setInterval(() => {
+        if (userClosed || document.querySelector('.ha-window')) return;
+
+        const b = opener();
+
+        if (b) b.click();
+      }, 2000);
+    })();
+  })();
 })();
