@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.4.90
+// @version      0.4.92
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -21,7 +21,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.4.90';
+  const VERSION = '0.4.92';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -9835,6 +9835,12 @@
           npcSt.data.locked = new Set();
         }
 
+        try {
+          const mm = await api('?category=Pokemon');
+
+          npcSt.data.mine = (mm && mm.mine) || [];
+        } catch (e) {}
+
         const a = depotToOwned(npcSt.data.depot);
 
         if (a) setOwned(a);
@@ -10200,6 +10206,17 @@
     wsSend({ type: 'pokes-get' }, ['pokes']).catch(() => {});
   }
 
+  function npcMine() {
+    const m = npcSt.data.mine || sl.mine || [];
+
+    return {
+      items: new Set(m.filter((l) => l && l.kind !== 'pokemon' && !l.capturedId && l.refId != null).map((l) => String(l.refId))),
+      pokes: new Set(m.filter((l) => l && l.capturedId != null).map((l) => String(l.capturedId)))
+    };
+  }
+
+  const pokeListed = (p, M) => !!(p.listed || p.onMarket || p.inMarket || p.forSale || p.isListed || M.pokes.has(String(p.id)));
+
   function shopPokeSell() {
     askPokes();
 
@@ -10207,11 +10224,12 @@
 
     if (!all.length) return '<div class="mk-empty">Carregando seus Pokémon…</div>';
 
-    const list = npcPokeFilter(all.filter((p) => !p.team && p.sellValue > 0));
+    const M = npcMine();
+    const list = npcPokeFilter(all.filter((p) => !p.team && p.sellValue > 0 && !pokeListed(p, M)));
     const sel = npcSt.pokeSel || (npcSt.pokeSel = new Set());
 
     [...sel].forEach((id) => {
-      if (!all.some((p) => p.id === id && !p.team)) sel.delete(id);
+      if (!all.some((p) => p.id === id && !p.team && !pokeListed(p, M))) sel.delete(id);
     });
 
     npcSt.pokeList = list;
@@ -10234,7 +10252,7 @@
           : pokeCards(list, 'sell', 'sell', sel)) ||
         '<div class="mk-empty">Nenhum Pokémon para vender (os do time ficam de fora).</div>'
       }</div>
-      <div class="mk-dim npc-note">Pokémon do time não aparecem aqui. Clique na linha para marcar.</div>`
+      <div class="mk-dim npc-note">Pokémon do time e os anunciados no mercado não aparecem aqui. Clique na linha para marcar.</div>`
     );
   }
 
@@ -10480,6 +10498,20 @@
 
                 if (r.gold != null) d.gold = r.gold;
 
+                const got = +(r.bought || q);
+
+                if (isBall) {
+                  const c = wsSt.ballCounts;
+
+                  if (c) c[x.id] = +(c[x.id] || c[String(x.id)] || 0) + got;
+                } else if (npcSt.data.depot) {
+                  const inv = npcSt.data.depot.inventory || (npcSt.data.depot.inventory = []);
+                  const it = inv.find((y) => y.id === x.id);
+
+                  if (it) it.quantity += got;
+                  else inv.push({ id: x.id, name: x.name, quantity: got });
+                }
+
                 npcRender();
               }
             }
@@ -10534,7 +10566,8 @@
             npcSec('Itens', (d.items || []).map((x) => sell(x, false)).join(''))
           : (() => {
               const locked = npcSt.data.locked || new Set();
-              const list = inv.filter((x) => x.npcPrice > 0 && !locked.has(x.id) && !isBlocked(x.name));
+              const listedI = npcMine().items;
+              const list = inv.filter((x) => x.npcPrice > 0 && !locked.has(x.id) && !listedI.has(String(x.id)) && !isBlocked(x.name));
               const sel = npcSt.sellSel || (npcSt.sellSel = new Set());
 
               [...sel].forEach((id) => {
@@ -10567,7 +10600,7 @@
                     )
                     .join('') || '<div class="mk-empty">Nada vendável na mochila.</div>'
                 }</div>
-                <div class="mk-dim npc-note">Itens travados no jogo e os da lista "Nunca vender" ficam de fora. Clique no item para vender só uma parte.</div>`;
+                <div class="mk-dim npc-note">Itens travados no jogo, anunciados no mercado e os da lista "Nunca vender" ficam de fora. Clique no item para vender só uma parte.</div>`;
             })());
     } else if (key === 'depot') {
       const inv = d.inventory || [];
