@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poke Idle - LiveSearch
 // @namespace    poke-idle-market
-// @version      0.7.3
+// @version      0.8.8
 // @description  LiveSearch by k4f
 // @match        https://poke.idleworld.online/play*
 // @run-at       document-idle
@@ -21,7 +21,7 @@
 
   /* ---------- config ---------- */
   const PW = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.7.3';
+  const VERSION = '0.8.8';
   const API = '/api/game/market';
   const POLL_POKEMON_MS = 8000;
   const POLL_ITEMS_MS = 20000;
@@ -128,6 +128,7 @@
   const state = {
     alerts: store.get('alerts', []) || [],
     purchased: store.get('purchased', []) || [],
+    lost: store.get('lost', []) || [],
     muted: !!store.get('muted', false),
     on: store.get('on', true) !== false,
     notifyOS: store.get('notifyOS', true) !== false,
@@ -139,6 +140,7 @@
   const save = () => {
     store.set('alerts', state.alerts);
     store.set('purchased', state.purchased);
+    store.set('lost', state.lost);
     store.set('muted', state.muted);
     store.set('on', state.on);
     store.set('notifyOS', state.notifyOS);
@@ -936,6 +938,7 @@
       const ids = speciesIdsOf(a);
 
       if (ids.length && !ids.includes(+l.speciesId)) return false;
+      if (Array.isArray(a.exclude) && a.exclude.some((x) => +x.speciesId === +l.speciesId)) return false;
       if (a.ivMin && !(l.ivTotal >= a.ivMin)) return false;
       if (a.qMin && !(l.quality >= a.qMin)) return false;
       if (a.shinyOnly && !l.shiny) return false;
@@ -1836,7 +1839,7 @@
   let cpopDone = null;
   let cpopFinish = null;
 
-  function confirmPop(anchor, detail) {
+  function confirmPop(anchor, detail, qo) {
     if (cpopDone) cpopDone(false);
     if (cpopFinish) cpopFinish(false);
 
@@ -1852,10 +1855,39 @@
       <button type="button" class="cp-x" title="Cancelar">✕</button>
       <b>Confirmar compra?</b>
       ${detail ? `<small>${esc(detail)}</small>` : ''}
+      ${qo ? `<div class="cp-qty"><button type="button" data-d="-1">−</button><input type="number" min="1" max="${qo.max}" value="${qo.max}"><button type="button" data-d="1">+</button><button type="button" class="cp-max">máx</button></div>
+      <div class="cp-tot"><span>Total</span><b></b></div>` : ''}
       <button type="button" class="cp-ok">Confirmar</button>
       <i class="cp-arrow"></i>`;
     el.style.display = 'flex';
     el.style.visibility = 'hidden';
+    el.classList.toggle('q', !!qo);
+
+    const qin = qo ? el.querySelector('.cp-qty input') : null;
+    const qval = () => Math.floor(Number(qin.value));
+    const qok = () => qval() >= 1 && qval() <= qo.max;
+    const qupd = () => {
+      const v = qval();
+
+      el.querySelector('.cp-tot b').textContent = qok() ? qo.fmt(v * qo.price) : 'máx ' + fmt(qo.max);
+      el.querySelector('.cp-tot').classList.toggle('bad', !qok());
+      el.querySelector('.cp-ok').disabled = !qok();
+    };
+
+    if (qo) {
+      qin.addEventListener('input', qupd);
+      el.querySelectorAll('.cp-qty [data-d]').forEach((b) =>
+        b.addEventListener('click', () => {
+          qin.value = Math.max(1, Math.min(qo.max, (qval() || 0) + +b.dataset.d));
+          qupd();
+        })
+      );
+      el.querySelector('.cp-max').addEventListener('click', () => {
+        qin.value = qo.max;
+        qupd();
+      });
+      qupd();
+    }
 
     const card = (anchor && anchor.closest('.mtal-hit, .mkc, .mkc-row, .mkc-cell')) || anchor;
     const panel = anchor && anchor.closest('#mtal-panel');
@@ -1900,6 +1932,8 @@
         card.classList.remove('mtal-confirming');
       };
       const done = (v) => {
+        if (v && qo && !qok()) return;
+
         cpopDone = null;
         document.removeEventListener('mousedown', outside, true);
         document.removeEventListener('keydown', key, true);
@@ -1908,6 +1942,8 @@
           close();
           return res(false);
         }
+
+        const out = qo ? qval() : true;
 
         const ok = el.querySelector('.cp-ok');
 
@@ -1927,7 +1963,7 @@
           }, 1000);
         };
 
-        res(true);
+        res(out);
       };
       const outside = (e) => {
         if (!el.contains(e.target) && !(anchor && anchor.contains(e.target))) done(false);
@@ -1947,7 +1983,12 @@
         document.addEventListener('mousedown', outside, true);
         document.addEventListener('keydown', key, true);
       }, 0);
-      el.querySelector('.cp-ok').focus();
+      if (qin) {
+        qin.focus();
+        qin.select();
+      } else {
+        el.querySelector('.cp-ok').focus();
+      }
     });
   }
 
@@ -2004,31 +2045,45 @@
       }
     } else if (h.kind !== 'pokemon') {
       const max = h.quantity || 1;
+      const v = await confirmPop(btn, h.name + ' · ' + priceTxt + '/un', {
+        max,
+        price: h.price || 0,
+        fmt: (n) => ([currencyIcon(h.currency), fmt(n)].filter(Boolean).join(' '))
+      });
 
-      const v = prompt(
-        'Quantidade de ' +
-          h.name +
-          ' (máx ' +
-          max +
-          ') · ' +
-          priceTxt +
-          '/un',
-        '1'
-      );
+      if (!v) return;
 
-      if (v == null) return;
+      qty = v;
+    } else if (btn.closest('#mtal-hits')) {
+      // Achados: 1º clique arma (ícone de confirmar), 2º clique compra.
+      if (btn.dataset.arm !== '1') {
+        btn.dataset.arm = '1';
+        btn.classList.add('arm');
+        btn.textContent = '✔';
+        btn.title = 'Clique de novo para confirmar a compra';
+        clearTimeout(btn._armT);
+        btn._armT = setTimeout(() => {
+          delete btn.dataset.arm;
+          btn.classList.remove('arm');
+          btn.textContent = '🛒';
+          btn.title = 'Comprar';
+        }, 3000);
 
-      qty = Math.floor(Number(v));
-
-      if (!(qty >= 1 && qty <= max)) {
-        toast('Quantidade inválida.');
         return;
       }
+
+      clearTimeout(btn._armT);
+      delete btn.dataset.arm;
+      btn.classList.remove('arm');
+      btn.textContent = '🛒';
+      btn.title = 'Comprar';
     } else if (
       !(await confirmPop(btn, h.name + ' · ' + priceTxt))
     ) {
       return;
     }
+
+    const card = btn.closest('.mtal-hit');
 
     btn.disabled = true;
 
@@ -2045,6 +2100,10 @@
           qty
         );
 
+      h.buyState = 'ok';
+
+      if (card) card.classList.add('bought-ok');
+
       recordPurchase(h, res, 'Comprado: ', qty);
 
       if (cpopFinish) cpopFinish(true);
@@ -2059,7 +2118,45 @@
       btn.disabled = false;
       btn.textContent =
         original;
+
+      if (hits.includes(h)) {
+        if (card) {
+          card.classList.remove('bought-ok');
+          card.classList.add('bought-err');
+        }
+
+        setTimeout(() => recordLost(h, e), 900);
+      } else {
+        h.buyState = 'err';
+
+        if (card) {
+          card.classList.remove('bought-ok');
+          card.classList.add('bought-err');
+        }
+      }
     }
+  }
+
+  function recordLost(h, e) {
+    const idx = hits.indexOf(h);
+
+    if (idx >= 0) hits.splice(idx, 1);
+
+    state.lost.unshift({
+      ...h,
+      buyState: 'err',
+      autoBuying: false,
+      lostErr: String((e && e.message) || e || 'Falhou'),
+      lostAt: Date.now()
+    });
+
+    if (state.lost.length > MAX_PURCHASED) state.lost.length = MAX_PURCHASED;
+
+    save();
+    renderHits();
+    renderLostCount();
+
+    if (activeTab === 'lost') renderLost();
   }
 
   function recordPurchase(h, res, label, qty) {
@@ -2151,6 +2248,7 @@
       a.boughtCount = Math.max(0, (a.boughtCount || 0) - qty);
       h.autoBuying = false;
       toast('Auto-compra falhou (' + h.name + '): ' + ((e && e.message) || e));
+      recordLost(h, e);
     }
   }
 
@@ -2979,6 +3077,8 @@
     const isPurchased =
       !!h.purchasedAt;
 
+    const itemHead = h.kind !== 'pokemon' && !h.npcAction;
+
     const priceTxt =
       h.offerOnly
         ? 'Apenas ofertas'
@@ -3128,6 +3228,8 @@
           ? `<div class="d-mkc"><div class="mkc-grid">${mkPokeCard(h, '')}</div></div>`
           : rich
           ? rpHtml(h, rv)
+          : itemHead
+          ? dItemHead(h)
           : `      <div id="mtal-d-img">
         ${
           img
@@ -3200,13 +3302,10 @@
 
         <button type="button" id="mtal-d-sgo">$ Anunciar</button>
 
-        ${
-          h.price && h.kind !== 'pokemon'
-            ? `<div class="mtal-d-npc">Valor no NPC: $ ${esc(fmt(h.price))}</div>`
-            : ''
-        }
       </div>
-      ${h.kind === 'pokemon' ? '<div id="mtal-d-cmp" class="cmp"></div>' : ''}`
+      <div id="mtal-d-cmp" class="cmp"></div>`
+          : itemHead
+          ? ''
           : `<div id="mtal-d-price">
         <span>${
           isPurchased
@@ -3391,13 +3490,17 @@
       if (q) setTimeout(() => q.focus(), 0);
     }
 
-    if (h.kind === 'pokemon' && !h.inventory && !h.mine && detailsAnchor === 'mtal-mk' && mk.rows.includes(h) && (h.raw || {}).speciesId) {
+    const cmpSrc = mk.rows.includes(h) || hits.includes(h) || state.purchased.includes(h) || state.lost.includes(h);
+
+    if (!h.inventory && !h.mine && !h.npcAction && cmpSrc && (h.kind !== 'pokemon' || (h.raw || {}).speciesId)) {
       const dv = document.createElement('div');
 
       dv.id = 'mtal-d-cmp';
       dv.className = 'cmp';
       $('mtal-d-body').appendChild(dv);
-      cmpInit(h);
+
+      if (h.kind === 'pokemon') cmpInit(h);
+      else cmpItemInit(h);
     }
 
     if (h.inventory || h.mine) {
@@ -3447,7 +3550,10 @@
 
       setTimeout(() => sp.focus(), 0);
 
-      if (h.kind === 'pokemon' && $('mtal-d-cmp')) cmpInit(h);
+      if ($('mtal-d-cmp')) {
+        if (h.kind === 'pokemon') cmpInit(h);
+        else cmpItemInit(h);
+      }
     }
 
 
@@ -3530,9 +3636,9 @@
   /* ---------- saídas do PokeIdle Market (pokeidlemarket.com.br) ---------- */
   const extCache = new Map();
 
-  function extHistory(name, ivMin, qMin) {
+  function extHistory(name, ivMin, qMin, cat) {
     const url =
-      'https://www.pokeidlemarket.com.br/api/market/history?category=Pokemon&currency=All&search=' +
+      'https://www.pokeidlemarket.com.br/api/market/history?category=' + encodeURIComponent(cat || 'Pokemon') + '&currency=All&search=' +
       encodeURIComponent(name) +
       (ivMin != null ? '&minIv=' + Math.max(0, Math.floor(ivMin)) : '') +
       (qMin != null ? '&minQuality=' + Math.max(0, qMin).toFixed(2) : '') +
@@ -3652,6 +3758,7 @@
           lv: num(pick(x, ['level', 'lvl'])) || (lvM ? +lvM[1] : null),
           sh: !!pick(x, ['shiny', 'isShiny']),
           p: num(pick(x, ['price', 'unitPrice', 'lastPrice', 'value', 'amount'])),
+          qty: num(pick(x, ['quantity', 'qty'])),
           cur: /dia/i.test(cur) ? 'DIAMONDS' : 'GOLD',
           off: false,
           gone: ts(pick(x, ['endedAt', 'soldAt', 'ended_at', 'removedAt', 'closedAt', 'at', 'updatedAt'])) || Date.now(),
@@ -3835,6 +3942,141 @@
         }
       }, 400);
     };
+  }
+
+  function cmpItemInit(h) {
+    const box = $('mtal-d-cmp');
+
+    if (!box) return;
+
+    const forHid = h.hid;
+    const nm = String(h.name || '').trim().toLowerCase();
+    const isDia = (c) => c === 'DIAMONDS' || c === 'DIAMOND';
+    const cats = CATEGORIES.includes(h.category) ? [h.category] : CATEGORIES;
+    let live = null;
+    let ext = null;
+    let extErr = '';
+
+    const minOf = (arr, dia) => {
+      const ps = arr.filter((x) => !x.off && x.p != null && isDia(x.cur) === dia).map((x) => x.p);
+
+      return ps.length ? Math.min(...ps) : null;
+    };
+    const lastOf = (arr, dia) => {
+      const x = arr.find((y) => !y.off && y.p != null && isDia(y.cur) === dia);
+
+      return x ? x.p : null;
+    };
+    const both = (g, dm) =>
+      `<div class="cmp-cur"><b>${g != null ? '$ ' + fmt(g) : '<i>$ —</i>'}</b><b class="dia">${dm != null ? '💎 ' + fmt(dm) : '<i>💎 —</i>'}</b></div>`;
+    const row = (o, when) => `<div class="cmp-row cmp-irow" data-cmpp="${o.off ? '' : esc(o.p)}" data-cmpc="${isDia(o.cur) ? 'DIAMONDS' : 'GOLD'}" title="${o.off ? '' : 'Usar este preço e moeda'}">
+        <span class="cmp-qty">${o.qty != null ? fmt(o.qty) + '×' : '-'}</span>
+        <span class="cmp-rt">${when ? `<span class="cmp-when">${when}</span>` : ''}<b class="cmp-p">${o.off ? 'oferta' : esc(priceTxt2(o.p, o.cur)) + '<small>/un</small>'}</b></span>
+      </div>`;
+
+    const draw = () => {
+      if (detailsHid !== forHid || !$('mtal-d-cmp')) return;
+
+      const mine = new Set((sl.mine || []).map((x) => x.id));
+
+      if (h.id) mine.add(h.id);
+
+      const selling = (live || [])
+        .filter((l) => String(l.name || '').trim().toLowerCase() === nm && !mine.has(l.id) && !(Array.isArray(l.ids) && l.ids.some((i) => mine.has(i))))
+        .map((l) => ({ qty: l.quantity, p: l.price, cur: l.currency, off: !!l.offerOnly }))
+        .sort((a, b) => (a.off ? 1 : 0) - (b.off ? 1 : 0) || a.p - b.p);
+      const gone = (ext || []).filter((o) => !o.name || String(o.name).trim().toLowerCase() === nm).sort((a, b) => b.gone - a.gone);
+
+      box.innerHTML = `
+        <div class="cmp-head"><b>📈 Mercado — mesmo item</b></div>
+
+        <div class="cmp-sum">
+          <div><span>À venda agora</span>${live ? both(minOf(selling, false), minOf(selling, true)) : '<small>buscando…</small>'}</div>
+          <div><span>Última saída</span>${both(lastOf(gone, false), lastOf(gone, true))}</div>
+        </div>
+
+        <div class="cmp-sec">À venda agora (${selling.length})</div>
+        <div class="cmp-list">${selling.slice(0, 8).map((o) => row(o, '')).join('') || `<div class="cmp-empty">${live ? 'Ninguém vendendo agora.' : 'Buscando anúncios…'}</div>`}</div>
+
+        <div class="cmp-sec">Últimas saídas (${gone.length}) <small>${ext ? 'PokeIdle Market · 7 dias' : 'buscando…'}</small></div>
+        <div class="cmp-list">${
+          gone.slice(0, 12).map((o) => row(o, agoTxt(o.gone) + (o.relisted ? ' · 🔁' : ''))).join('') ||
+          `<div class="cmp-empty">${!ext ? 'Buscando no PokeIdle Market…' : extErr ? '⚠ ' + esc(extErr) : 'Nenhuma saída nos últimos 7 dias.'}</div>`
+        }</div>
+        ${$('mtal-d-sprice') ? '<div class="cmp-note">Clique numa linha para usar o preço.</div>' : ''}`;
+    };
+
+    draw();
+
+    Promise.all(cats.map((c) => api('?category=' + encodeURIComponent(c), 20000).then((d) => (d && d.listings) || []).catch(() => []))).then((ls) => {
+      const seen = new Set();
+
+      live = ls.flat().filter((l) => (l.id == null || seen.has(l.id) ? l.id == null : (seen.add(l.id), true)));
+      draw();
+    });
+
+    extHistory(String(h.name || '').trim(), null, null, cats.length === 1 ? cats[0] : 'All')
+      .then((L) => {
+        ext = L;
+        draw();
+      })
+      .catch((e) => {
+        extErr = String((e && e.message) || e);
+        ext = [];
+        draw();
+      });
+
+    box.onclick = (e) => {
+      const rw = e.target.closest('[data-cmpp]');
+
+      if (rw && rw.dataset.cmpp && $('mtal-d-sprice')) {
+        const sc = $('mtal-d-scur');
+
+        if (sc && rw.dataset.cmpc && sc.value !== rw.dataset.cmpc) {
+          sc.value = rw.dataset.cmpc;
+          sc.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
+        $('mtal-d-sprice').value = fmt(+rw.dataset.cmpp);
+        $('mtal-d-sprice').dispatchEvent(new Event('input', { bubbles: true }));
+        $('mtal-d-sprice').focus();
+      }
+    };
+  }
+
+  function dItemHead(h) {
+    const img = itemImage(h);
+    const dia = h.currency === 'DIAMONDS' || h.currency === 'DIAMOND';
+    const cur = dia ? '💎' : '$';
+    const cc = dia ? 'dia' : 'gold';
+    let boxes;
+
+    if (h.inventory) {
+      const own = h.quantity || 0;
+      const np = h.price || 0;
+
+      boxes = [['Você tem', fmt(own) + '×'], np ? ['NPC paga', '$ ' + fmt(np), 'gold'] : null, np ? ['Total NPC', '$ ' + fmt(np * own), 'gold'] : null];
+    } else {
+      const q = h.quantity != null ? h.quantity : 1;
+
+      boxes = [
+        [h.mine ? 'Anunciado' : 'Quantidade', fmt(q) + '×'],
+        ['Preço/un', h.offerOnly ? 'oferta' : cur + ' ' + fmt(h.price || 0), cc],
+        [h.purchasedAt ? 'Pago' : 'Total', h.offerOnly ? '-' : cur + ' ' + fmt((h.price || 0) * q), cc]
+      ];
+    }
+
+    return `<div class="d-ih">
+        <div class="d-iic">${img ? `<img src="${esc(img)}" onerror="this.parentElement.textContent='❔'">` : '❔'}</div>
+        <div class="d-iid">
+          <div class="d-in" title="${esc(h.name || '')}">${esc(h.name || '-')}</div>
+          <div class="d-is">${esc(catLabel(h.category) || 'Item')}${h.belowNpc ? ' · <span class="d-npc">abaixo do NPC</span>' : ''}</div>
+        </div>
+      </div>
+      <div class="d-ib">${boxes
+        .filter(Boolean)
+        .map(([k, v, c]) => `<div><span>${k}</span><b class="${c || ''}">${esc(v)}</b></div>`)
+        .join('')}</div>`;
   }
 
   function showDetails(h, anchor) {
@@ -4272,6 +4514,17 @@
     #mtal-cpop .cp-arrow{position:absolute;width:10px;height:10px;margin-top:-5px;background:#12141f;border:1px solid #3a4060;transform:rotate(45deg)}
     #mtal-cpop.r .cp-arrow{left:-6px;border-top:none;border-right:none}
     #mtal-cpop.l .cp-arrow{right:-6px;border-bottom:none;border-left:none}
+    #mtal-cpop.q{width:220px}
+    #mtal-cpop .cp-qty{display:flex;gap:4px;margin-top:4px}
+    #mtal-cpop .cp-qty button{width:26px;height:28px;padding:0;background:#1b1f30;border:1px solid #2c3250;border-radius:6px;color:#c7cbe0}
+    #mtal-cpop .cp-qty button:hover{border-color:#4a5176;color:#fff}
+    #mtal-cpop .cp-qty .cp-max{width:auto;padding:0 8px;font-size:11px}
+    #mtal-cpop .cp-qty input{flex:1;min-width:0;height:28px;box-sizing:border-box;padding:0 8px;background:#0d0f18;border:1px solid #2c3250;border-radius:6px;color:#f2ead0;font:600 13px Inter,sans-serif;text-align:center;-moz-appearance:textfield}
+    #mtal-cpop .cp-qty input::-webkit-inner-spin-button,#mtal-cpop .cp-qty input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+    #mtal-cpop .cp-qty input:focus{outline:none;border-color:#e0b95a}
+    #mtal-cpop .cp-tot{display:flex;justify-content:space-between;font-size:11px;color:#9aa0b8}
+    #mtal-cpop .cp-tot b{padding:0;font-size:12px;color:#e0b95a}
+    #mtal-cpop .cp-tot.bad b{color:#ff5f6d}
     .mtal-confirming{outline:1px solid #e8eaf2;outline-offset:-1px}
     #mtal-panel-body{flex:1;min-height:0;overflow-y:auto;padding:0 10px 10px 10px;scrollbar-width:thin}
     #mtal-panel-body::-webkit-scrollbar{width:3px}
@@ -4534,6 +4787,9 @@
     #mtal-panel .lsp-ivt{color:#55e6d3}
     #mtal-panel .lsp-atk.F{color:#ff9f43}
     #mtal-panel .lsp-atk.E{color:#7aa2ff}
+    #mtal-panel .mtal-hit.lsp.bought-ok{background:linear-gradient(90deg,rgba(46,204,113,.26),rgba(46,204,113,.08) 55%,#1a1e30)!important;border-color:rgba(97,246,164,.6)!important;box-shadow:inset 0 0 18px rgba(46,204,113,.14)!important}
+    #mtal-panel .mtal-hit.lsp.bought-err{background:linear-gradient(90deg,rgba(214,48,64,.34),rgba(214,48,64,.1) 55%,#1a1e30)!important;border-color:rgba(255,95,109,.7)!important;box-shadow:inset 0 0 18px rgba(214,48,64,.16)!important}
+    #mtal-panel .mtal-buy.arm{background:#2e7d4f!important;border-color:#61f6a4!important;color:#fff!important}
     #mtal-panel .mtal-hit.lsp.myth{background:linear-gradient(90deg,rgba(214,48,64,.26),rgba(214,48,64,.08) 55%,#1a1e30);border-color:rgba(235,80,95,.55);box-shadow:inset 0 0 18px rgba(214,48,64,.12)}
     #mtal-panel .lsp-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,auto);grid-auto-flow:column;gap:7px 8px}
     #mtal-panel .lsp-stats.est{opacity:.55}
@@ -4632,6 +4888,7 @@
     #mtal-form .mtal-chip{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 4px 0 9px;background:#262b3f;border:1px solid #3a4060;border-radius:999px;font-size:11.5px;color:#f2ead0;white-space:nowrap}
     #mtal-panel #mtal-form .mtal-chip button{width:16px;height:16px;padding:0;display:grid;place-items:center;background:transparent;border:none;border-radius:50%;color:#9aa0b8;font-size:9px;line-height:1}
     #mtal-panel #mtal-form .mtal-chip button:hover{background:#ff6b6b;color:#fff}
+    #mtal-form .mtal-chip.x{background:#2a1d22;border-color:#5a2f38}
     #mtal-form .mtal-chipbox input[type=text]{flex:1;min-width:120px;width:auto;height:22px;padding:0 4px;background:transparent;border:none}
     #mtal-form .mtal-ac{position:absolute;left:0;right:0;top:100%;z-index:5;margin-top:4px;max-height:220px;overflow:auto;background:#1a1e30;border:1px solid #3a4060;border-radius:6px;box-shadow:0 8px 20px rgba(0,0,0,.5)}
     #mtal-form .mtal-ac-opt{display:flex;justify-content:space-between;padding:7px 10px;font-size:12px;color:#e8e3d0;cursor:pointer}
@@ -4931,6 +5188,8 @@
     #mtal-mk .mk-fcol .mk-chip.on{opacity:1;border-color:currentColor;background:color-mix(in srgb,currentColor 14%,transparent)}
     #mtal-mk .mk-res{display:flex;flex-direction:column;min-width:0;min-height:0}
     #mtal-mk .mk-table-wrap{flex:1;min-height:0;overflow:auto;scrollbar-width:thin}
+    #mtal-mk .mk-spin{display:inline-block;width:12px;height:12px;margin-right:6px;vertical-align:-2px;border:2px solid rgba(224,185,90,.25);border-top-color:#e0b95a;border-radius:50%;animation:mkspin .7s linear infinite}
+    @keyframes mkspin{to{transform:rotate(360deg)}}
     #mtal-mk table{width:100%;border-collapse:collapse}
     #mtal-mk thead th{position:sticky;top:0;z-index:1;background:#171a28;color:#9aa0b8;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;text-align:left;padding:8px 10px;border-bottom:1px solid #2c3148;white-space:nowrap;user-select:none}
     #mtal-mk thead th.r{text-align:right}
@@ -5014,6 +5273,12 @@
     #mtal-mk .mkc-side .mk-price{font-size:13px;text-align:right;white-space:nowrap}
     #mtal-mk .mk-empty{text-align:center;color:#7c829c;padding:30px}
     #mtal-mk .mk-foot{display:flex;align-items:center;gap:10px;padding:8px 12px;border-top:1px solid #232840;color:#9aa0b8}
+    #mtal-mk .mk-pager{display:flex;align-items:center;gap:2px}
+    #mtal-mk .mk-foot .mk-pager button{min-width:22px;height:22px;padding:0 4px;margin:0;border:0;border-radius:4px;background:none;box-shadow:none;color:#7c829c;font-size:12px;font-weight:500;cursor:pointer}
+    #mtal-mk .mk-foot .mk-pager button:hover:not(:disabled){color:#f2ead0;background:rgba(255,255,255,.05)}
+    #mtal-mk .mk-foot .mk-pager button.on{color:#e0b95a;font-weight:700}
+    #mtal-mk .mk-foot .mk-pager button:disabled{opacity:.25;cursor:default}
+    #mtal-mk .mk-pager .mk-pgdots{padding:0 2px;color:#4c5168;font-size:12px}
     #mtal-mk:not([data-mode="buy"]) .mk-buyv,#mtal-mk:not([data-mode="sell"]) .mk-sellv,#mtal-mk:not([data-mode="hist"]) .mk-histv{display:none!important}
     #mtal-mk #mk-hist{flex:1;min-height:0;overflow:auto;padding:0 12px 12px;scrollbar-width:thin}
     #mtal-mk .hist-cols{display:grid;grid-template-columns:1fr 1fr;gap:18px}
@@ -5061,6 +5326,25 @@
     #mtal-mk #sl-filter{width:180px}
     #mtal-mk .sl-grid{flex:1;min-height:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));grid-auto-rows:max-content;align-content:start;gap:8px;margin:10px 0;overflow:auto;padding:2px;scrollbar-width:thin}
     #mtal-mk .sl-grid .mk-empty{grid-column:1/-1}
+    #mtal-mk .sl-grid.itg,#mtal-mk #mk-npc .sl-grid{grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}
+    #mtal-mk .itl{display:flex;align-items:center;gap:10px;min-width:0;padding:7px 10px 7px 7px;background:#161927;border:1px solid #232840;border-radius:10px;color:inherit;font:inherit;text-align:left;cursor:pointer;transition:border-color .12s,background .12s}
+    #mtal-mk .itl:hover{border-color:#3a4060;background:#191c2b}
+    #mtal-mk .itl.on{border-color:#e0b95a;background:#1c1f2c}
+    #mtal-mk .itl.npc-ro{cursor:default}
+    #mtal-mk .itl-ic{flex:none;width:40px;height:40px;display:grid;place-items:center;background:#0f111a;border-radius:8px;font-size:15px;overflow:hidden}
+    #mtal-mk .itl-ic img{max-width:32px;max-height:32px;image-rendering:pixelated}
+    #mtal-mk .itl-ic .sl-thumb{width:100%;height:100%}
+    #mtal-mk .itl-id{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+    #mtal-mk .itl-n{font-size:12px;font-weight:600;color:#f2ead0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #mtal-mk .itl-s{font-size:10.5px;color:#7c829c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #mtal-mk .itl-s .npc-have{display:inline;margin:0;font-size:inherit}
+    #mtal-mk .itl-r{flex:none;font-size:13px;font-weight:700;color:#f2ead0;white-space:nowrap}
+    #mtal-mk .itl-r.gold{color:#f0d78c}
+    #mtal-mk #mk-npc{display:flex;flex-direction:column}
+    #mtal-mk #npc-body{flex:1 0 auto}
+    #mtal-mk .npc-wallet{position:sticky;bottom:-12px;z-index:2;display:flex;align-items:baseline;gap:10px;margin:10px -12px -12px;padding:10px 14px;background:#12141f;border-top:1px solid #232840}
+    #mtal-mk .npc-wallet span{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#7c829c}
+    #mtal-mk .npc-wallet b{font-size:18px;font-weight:800;color:#f0d78c}
     #mtal-mk .sl-card{display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 6px;background:#1a1e30;border:1px solid #2c3148;border-radius:8px;min-width:0}
     #mtal-mk .sl-card.on{border-color:#c7cbe0;background:#1e2336}
     #mtal-mk .sl-thumb{width:44px;height:44px;display:flex;align-items:center;justify-content:center;font-size:16px}
@@ -5160,6 +5444,23 @@
     .cmp-list{display:flex;flex-direction:column;gap:4px}
     .cmp-row{display:grid;grid-template-columns:62px 48px 44px minmax(0,1fr);align-items:center;gap:6px;padding:5px 8px;background:#161927;border:1px solid #232840;border-radius:6px;font-size:11px;color:#c7cbe0;cursor:pointer}
     .cmp-row:hover{border-color:#e8eaf2}
+    .cmp-row.cmp-irow{grid-template-columns:minmax(0,1fr) auto}
+    .cmp-qty{color:#f2ead0;font-weight:600}
+    .cmp-p small{margin-left:2px;font-size:9.5px;font-weight:500;color:#7c829c}
+    #mtal-details .d-ih{display:flex;align-items:center;gap:12px;padding:4px 2px 12px}
+    #mtal-details .d-iic{flex:none;width:64px;height:64px;display:grid;place-items:center;background:radial-gradient(circle at 50% 40%,#23283d,#12141f 75%);border:1px solid #232840;border-radius:12px;font-size:22px}
+    #mtal-details .d-iic img{max-width:48px;max-height:48px;image-rendering:pixelated}
+    #mtal-details .d-iid{min-width:0;display:flex;flex-direction:column;gap:3px}
+    #mtal-details .d-in{font-size:15px;font-weight:700;color:#f2ead0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #mtal-details .d-is{font-size:11px;color:#7c829c}
+    #mtal-details .d-npc{color:#61f6a4}
+    #mtal-details .d-ib{display:grid;grid-template-columns:repeat(auto-fit,minmax(0,1fr));gap:6px;margin-bottom:10px}
+    #mtal-details .d-ib > div{display:flex;flex-direction:column;min-width:0;padding:7px 9px;background:#161927;border:1px solid #232840;border-radius:8px}
+    #mtal-details .d-ib span{font-size:9px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#7c829c}
+    #mtal-details .d-ib b{font-size:13px;color:#f2ead0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #mtal-details .d-ib b.gold{color:#f0d78c}
+    #mtal-details .d-ib b.dia{color:#55d6f0}
+    #mtal-details .cmp{margin-top:12px}
     .cmp-row[data-cmpp=""]{cursor:default}
     .cmp-iv b{color:#55e6d3}
     .cmp-rt{display:flex;flex-direction:column;align-items:flex-end;justify-self:end;line-height:1.25}
@@ -5239,6 +5540,17 @@
     #mtal-mk .mk-npcs{display:flex;flex-wrap:wrap;gap:4px}
     #mtal-mk .mk-npc{padding:5px 9px;color:#c7cbe0}
     #mtal-mk .mk-npc.active{background:#e8eaf2;border-color:#e8eaf2;color:#12141f}
+    #mtal-mk .mk-head{gap:14px;height:46px;padding:0 10px 0 14px;box-sizing:border-box}
+    #mtal-mk .mk-head > b{font-size:13.5px;white-space:nowrap}
+    #mtal-mk .mk-head .mk-modes,#mtal-mk .mk-head .mk-npcs{display:flex;align-items:stretch;flex-wrap:nowrap;gap:0;height:100%;padding:0;border:0}
+    #mtal-mk .mk-head .mk-modes::after{content:'';align-self:center;width:1px;height:16px;margin:0 6px 0 10px;background:#2c3148}
+    #mtal-mk .mk-head .mk-mode,#mtal-mk .mk-head .mk-npc{position:relative;height:100%;margin:0;padding:0 10px;background:none;border:0;border-radius:0;box-shadow:none;color:#7c829c;font-size:12.5px;font-weight:600;transition:color .12s}
+    #mtal-mk .mk-head .mk-npc{font-size:12px;font-weight:500}
+    #mtal-mk .mk-head .mk-mode:hover,#mtal-mk .mk-head .mk-npc:hover{color:#c7cbe0}
+    #mtal-mk .mk-head .mk-mode.active,#mtal-mk .mk-head .mk-npc.active{background:none;color:#f2ead0}
+    #mtal-mk .mk-head .mk-mode.active::after,#mtal-mk .mk-head .mk-npc.active::after{content:'';position:absolute;left:10px;right:10px;bottom:-1px;height:2px;border-radius:2px;background:#e0b95a}
+    #mtal-mk .mk-head #mk-refresh,#mtal-mk .mk-head #mk-close{width:30px;height:30px;padding:0;display:grid;place-items:center;background:none;border:0;border-radius:8px;color:#7c829c;font-size:14px}
+    #mtal-mk .mk-head #mk-refresh:hover,#mtal-mk .mk-head #mk-close:hover{background:#1e2233;color:#f2ead0}
     #mtal-mk:not([data-mode^="npc"]) .mk-npcv{display:none!important}
     #mtal-mk #mk-npc{flex:1;min-height:0;overflow:auto;padding:0 12px 12px;scrollbar-width:thin}
     #mtal-mk .npc-head{display:flex;align-items:center;gap:12px;margin-top:12px}
@@ -5527,6 +5839,15 @@
                 <div class="mtal-ac" id="f-ac" hidden></div>
               </div>
 
+              <div class="full mtal-fspecies">
+                <span>🚫 Excluir espécies <small class="mtal-dim">(não aparecem nem são compradas)</small></span>
+                <div class="mtal-chipbox" id="f-xchipbox">
+                  <div id="f-xchips"></div>
+                  <input type="text" id="f-xspecies" autocomplete="off" placeholder="Nenhuma — digite para excluir">
+                </div>
+                <div class="mtal-ac" id="f-xac" hidden></div>
+              </div>
+
               <datalist id="mtal-species"></datalist>
 
               <label>
@@ -5617,6 +5938,14 @@
             Comprados <span id="mtal-pcount" class="mtal-tabn"></span>
           </button>
 
+          <button
+            type="button"
+            class="mtal-tab"
+            data-tab="lost"
+          >
+            Perdidos <span id="mtal-lcount" class="mtal-tabn"></span>
+          </button>
+
           <span style="flex:1"></span>
 
           <button
@@ -5634,6 +5963,7 @@
           id="mtal-purchased"
           hidden
         ></div>
+        <div id="mtal-lost" hidden></div>
       </div>
 
       <div id="mtal-footer">
@@ -5776,7 +6106,7 @@
           <div class="mk-foot">
             <span id="mk-count"></span>
             <span style="flex:1"></span>
-            <button type="button" id="mk-more">Carregar mais</button>
+            <div class="mk-pager" id="mk-pager"></div>
           </div>
         </section>
       </div>
@@ -5829,6 +6159,7 @@
             <span class="mk-f">
               Ordenar
               <select id="sl-sort">
+                <option value="recent" selected>Recentes</option>
                 <option value="name">Nome</option>
                 <option value="lvl">Nível ↓</option>
                 <option value="iv">IV ↓</option>
@@ -5877,6 +6208,7 @@
         </div>
 
         <div id="npc-body"></div>
+        <div id="npc-wallet" class="npc-wallet" hidden></div>
       </div>
 
       <div id="mk-hist" class="mk-histv">
@@ -5996,7 +6328,7 @@
     const npc = r.npcPrice != null ? r.npcPrice : null;
     const total = h.price != null ? h.price * qty : null;
 
-    return `<div class="mtal-hit lsp lsi" data-hid="${h.hid}">
+    return `<div class="mtal-hit lsp lsi${h.buyState ? ' bought-' + h.buyState : ''}" data-hid="${h.hid}">
       <div class="lsp-sp">
         <div class="mtal-hit-thumb" data-hid="${h.hid}">${thumbHtml(h)}</div>
         <div class="mtal-hit-date">${time}</div>
@@ -6036,7 +6368,7 @@
     const atk = rpAtkKind(v);
     const myth = /^(m[ií]tic|mythic)/i.test(String(rar || ''));
 
-    return `<div class="mtal-hit lsp${myth ? ' myth' : ''}" data-hid="${h.hid}">
+    return `<div class="mtal-hit lsp${myth ? ' myth' : ''}${h.buyState ? ' bought-' + h.buyState : ''}" data-hid="${h.hid}">
       <div class="lsp-sp">
         <div class="mtal-hit-thumb" data-hid="${h.hid}">${hitMiniThumb(h) || thumbHtml(h)}</div>
         <div class="mtal-hit-date">${time}</div>
@@ -6119,8 +6451,48 @@
     );
   }
 
+  /* ---------- PERDIDOS ---------- */
+  function renderLostCount() {
+    const el = $('mtal-lcount');
+
+    if (el) el.textContent = state.lost.length ? '(' + state.lost.length + ')' : '';
+  }
+
+  function renderLost() {
+    renderLostCount();
+
+    const t = (ms) => new Date(ms).toLocaleTimeString('pt-BR');
+
+    if (!rpCre && state.lost.some((h) => h.kind === 'pokemon')) {
+      rpLoadCreatures().then((ok) => {
+        if (ok && activeTab === 'lost') renderLost();
+      });
+    }
+
+    $('mtal-lost').innerHTML = state.lost.length
+      ? state.lost
+          .map((h) =>
+            (h.kind === 'pokemon' ? lsPokeCard({ ...h, buyState: 'err' }, t(h.lostAt), true) : lsItemCard({ ...h, buyState: 'err' }, t(h.lostAt), true)).replace(
+              '<div class="mtal-hit lsp',
+              '<div title="' + esc(h.lostErr || '') + '" class="mtal-hit lsp'
+            )
+          )
+          .join('')
+      : `
+          <div class="mtal-emptycard">
+            <div class="ic">✕</div>
+            <b>Nada perdido</b>
+            <p>Compras que falharem (vendido antes, sem saldo…) aparecem aqui.</p>
+          </div>
+        `;
+
+    state.lost.forEach(ensureSprite);
+  }
+
   /* ---------- COMPRADOS ---------- */
   function renderPurchasedCount() {
+    renderLostCount();
+
     const el = $('mtal-pcount');
 
     if (el) el.textContent = state.purchased.length ? '(' + state.purchased.length + ')' : '';
@@ -6468,6 +6840,50 @@
     $('f-species').focus();
   }
 
+  // ---- espécies excluídas (mesmo esquema das espécies, com chips vermelhos)
+  let formExclude = [];
+  let xacIdx = 0;
+
+  function renderXChips() {
+    $('f-xchips').innerHTML = formExclude
+      .map((x, i) => `<span class="mtal-chip x">${esc(x.name)}<button type="button" data-xrm="${i}" title="Remover">✕</button></span>`)
+      .join('');
+    $('f-xspecies').placeholder = formExclude.length ? 'Excluir outra…' : 'Nenhuma — digite para excluir';
+  }
+
+  function xacMatches(txt) {
+    return acMatches(txt).filter((x) => !formExclude.some((y) => +y.speciesId === +x.speciesId));
+  }
+
+  function xacHide() {
+    $('f-xac').hidden = true;
+    $('f-xac').innerHTML = '';
+  }
+
+  function xacRender() {
+    const m = xacMatches($('f-xspecies').value);
+
+    if (!m.length) return xacHide();
+
+    xacIdx = Math.min(xacIdx, m.length - 1);
+    $('f-xac').innerHTML = m
+      .map((x, i) => `<div class="mtal-ac-opt${i === xacIdx ? ' on' : ''}" data-i="${i}">${esc(x.name)}<small>#${esc(x.speciesId)}</small></div>`)
+      .join('');
+    $('f-xac').hidden = false;
+  }
+
+  function xacPick(i) {
+    const sp = xacMatches($('f-xspecies').value)[i];
+
+    if (!sp) return;
+
+    formExclude.push({ speciesId: +sp.speciesId, name: sp.name });
+    renderXChips();
+    $('f-xspecies').value = '';
+    xacHide();
+    $('f-xspecies').focus();
+  }
+
   let editingId = null;
 
   function openForm(a) {
@@ -6562,6 +6978,11 @@
     $('f-species').value = '';
     renderChips();
     acHide();
+
+    formExclude = isPoke && Array.isArray(a.exclude) ? a.exclude.map((x) => ({ speciesId: +x.speciesId, name: x.name })) : [];
+    $('f-xspecies').value = '';
+    renderXChips();
+    xacHide();
 
     $('f-iv').value =
       isPoke &&
@@ -7244,6 +7665,57 @@
       acPick(+o.dataset.i);
     }
   });
+  $('f-xspecies').addEventListener('input', () => {
+    xacIdx = 0;
+    if (!species) loadSpecies();
+    xacRender();
+  });
+
+  $('f-xspecies').addEventListener('keydown', (e) => {
+    const open = !$('f-xac').hidden;
+    const n = $('f-xac').children.length;
+
+    if (e.key === 'ArrowDown' && open) {
+      e.preventDefault();
+      xacIdx = (xacIdx + 1) % n;
+      xacRender();
+    } else if (e.key === 'ArrowUp' && open) {
+      e.preventDefault();
+      xacIdx = (xacIdx - 1 + n) % n;
+      xacRender();
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      if (open) {
+        e.preventDefault();
+        xacPick(xacIdx);
+      }
+    } else if (e.key === 'Escape') {
+      xacHide();
+    } else if (e.key === 'Backspace' && !e.target.value && formExclude.length) {
+      formExclude.pop();
+      renderXChips();
+    }
+  });
+
+  $('f-xspecies').addEventListener('blur', () => setTimeout(xacHide, 150));
+  $('f-xac').addEventListener('mousedown', (e) => {
+    const o = e.target.closest('[data-i]');
+
+    if (o) {
+      e.preventDefault();
+      xacPick(+o.dataset.i);
+    }
+  });
+  $('f-xchipbox').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-xrm]');
+
+    if (b) {
+      formExclude.splice(+b.dataset.xrm, 1);
+      renderXChips();
+    }
+
+    $('f-xspecies').focus();
+  });
+
   $('f-chipbox').addEventListener('click', (e) => {
     const b = e.target.closest('[data-rm]');
 
@@ -7317,6 +7789,13 @@
         }
       }
     );
+
+  $('mtal-lost').addEventListener('click', (e) => {
+    const viewBtn = e.target.closest('.mtal-view');
+    const h = viewBtn && state.lost.find((x) => x.hid === +viewBtn.dataset.hid);
+
+    if (h) showDetails(h);
+  });
 
   $('mtal-purchased')
     .addEventListener(
@@ -7404,12 +7883,18 @@
             activeTab !==
             'purchased';
 
+          $('mtal-lost').hidden = activeTab !== 'lost';
+
           $('mtal-clear')
             .title =
             activeTab ===
             'hits'
               ? 'Limpar a lista de achados'
-              : 'Limpar o histórico de compras';
+              : activeTab === 'lost'
+                ? 'Limpar a lista de perdidos'
+                : 'Limpar o histórico de compras';
+
+          if (activeTab === 'lost') renderLost();
 
           if (
             activeTab ===
@@ -7425,6 +7910,14 @@
     .addEventListener(
       'click',
       () => {
+        if (activeTab === 'lost') {
+          state.lost.length = 0;
+          save();
+          renderLost();
+
+          return;
+        }
+
         if (
           activeTab ===
           'purchased'
@@ -7589,6 +8082,7 @@
           }
 
           a.species = formSpecies.slice();
+          a.exclude = formExclude.slice();
           a.speciesId = formSpecies.length === 1 ? formSpecies[0].speciesId : null;
           a.speciesName = formSpecies.map((x) => x.name).join(', ');
 
@@ -7928,12 +8422,13 @@
   }
 
   let mkAutoT = null;
+  const MK_PAGE = 30;
 
   function mkAutoMore() {
     clearTimeout(mkAutoT);
 
-    if (mk.cat !== 'pokemon' || mk.done || mk.loading || !mkClientFiltered()) return;
-    if (mkVisible().length >= 40 || mk.page > 120) return;
+    if (mk.cat !== 'pokemon' || mk.done || mk.loading) return;
+    if (mkVisible().length > mk.vpage * MK_PAGE || mk.page > 120) return;
 
     mkAutoT = setTimeout(() => mkLoad(false), 200);
   }
@@ -8160,13 +8655,22 @@
         : `<th colspan="8" class="mkc-bar"><div class="mkc-barin"><span>Ordenar: ${sb('Preço', 'price')}${sb('Quantidade', 'qty')}</span></div></th>`) +
       '</tr>';
 
-    const rows = mkVisible();
+    const all = mkVisible();
+    const psig = [mk.cat, mk.key, JSON.stringify(mkFilters()), [...mk.rar].join(','), [...mk.stones].join(','), mk.sort.k, mk.sort.dir].join('|');
+
+    if (psig !== mk._psig || !mk.vpage) mk.vpage = 1;
+
+    mk._psig = psig;
+
+    const pages = Math.max(1, Math.ceil(all.length / MK_PAGE));
+
+    if (mk.done && mk.vpage > pages) mk.vpage = pages;
+
+    const rows = all.slice((mk.vpage - 1) * MK_PAGE, mk.vpage * MK_PAGE);
 
     $('mk-tbody').parentElement.classList.toggle('mkc-table', true);
 
-    $('mk-tbody').innerHTML =
-      rows
-        .map((h) => {
+    const rowHtml = (h) => {
           const img = `<td class="mk-img"><div class="mtal-hit-thumb mk-thumb" data-hid="${h.hid}">${thumbHtml(h)}</div></td>`;
           const price = `<td class="mk-price">${esc(hitPrice(h))}</td>`;
           const acts = `<td class="mk-acts">
@@ -8226,33 +8730,105 @@
             <td class="mk-name">${esc(h.name || '-')}</td>
             <td>${h.quantity != null ? fmt(h.quantity) : '-'}</td>
             ${price}${acts}</tr>`;
-        })
-        .join('') ||
-      `<tr><td colspan="8" class="mk-empty">${
-        mk.loading ? 'Carregando…' : mk.err ? '⚠ ' + esc(mk.err) : 'Nenhum anúncio com esses filtros.'
-      }</td></tr>`;
+    };
 
-    if (poke && mk.view === 'grid' && rows.length) {
-      $('mk-tbody').innerHTML = `<tr class="mkc-gridrow"><td colspan="8"><div class="mkc-grid">${rows
-        .map((h) => `<div class="mtal-mkrow mkc-cell" data-hid="${h.hid}">${mkPokeCard(h)}</div>`)
-        .join('')}</div></td></tr>`;
+    const gridView = poke && mk.view === 'grid';
+    const cellHtml = (h) => `<div class="mtal-mkrow mkc-cell" data-hid="${h.hid}">${mkPokeCard(h)}</div>`;
+    const rsig = [mk.cat, gridView ? 'g' : 'l', mk.sort.k, mk.sort.dir, rpCre ? 1 : 0].join('|');
+    const prev = mk._rhids || [];
+    const tb = $('mk-tbody');
+    let fresh = rows;
+
+    if (
+      rows.length &&
+      prev.length &&
+      mk._rsig === rsig &&
+      rows.length >= prev.length &&
+      prev.every((id, i) => rows[i].hid === id) &&
+      (!gridView || tb.querySelector('.mkc-grid'))
+    ) {
+      fresh = rows.slice(prev.length);
+
+      if (fresh.length) {
+        if (gridView) {
+          tb.querySelector('.mkc-grid').insertAdjacentHTML('beforeend', fresh.map(cellHtml).join(''));
+        } else {
+          tb.insertAdjacentHTML('beforeend', fresh.map(rowHtml).join(''));
+        }
+      }
+    } else if (gridView && rows.length) {
+      tb.innerHTML = `<tr class="mkc-gridrow"><td colspan="8"><div class="mkc-grid">${rows.map(cellHtml).join('')}</div></td></tr>`;
+    } else {
+      tb.innerHTML =
+        rows.map(rowHtml).join('') ||
+        `<tr><td colspan="8" class="mk-empty">${
+          mk.loading || (!mk.done && all.length) ? '<span class="mk-spin"></span> Carregando…' : mk.err ? '⚠ ' + esc(mk.err) : 'Nenhum anúncio com esses filtros.'
+        }</td></tr>`;
     }
 
-    rows.filter((h) => !(h.kind === 'pokemon' && rpSprite(h, rpCreature(h)))).forEach(ensureSprite);
+    mk._rsig = rsig;
+    mk._rhids = rows.map((h) => h.hid);
+
+    fresh.filter((h) => !(h.kind === 'pokemon' && rpSprite(h, rpCreature(h)))).forEach(ensureSprite);
 
     if (mk.cat === 'all' && !rpCre && rows.some((h) => h.kind === 'pokemon')) {
       rpLoadCreatures().then((ok) => ok && mk.cat === 'all' && mkRender());
     }
 
-    $('mk-count').textContent =
-      rows.length +
-      ' de ' +
-      mk.rows.length +
-      ' carregados' +
-      (mk.loading && mk.rows.length ? (mkClientFiltered() ? ' · buscando em mais páginas…' : ' · carregando…') : '');
+    const from = (mk.vpage - 1) * MK_PAGE;
 
-    $('mk-more').hidden = !poke || mk.done;
-    $('mk-more').disabled = mk.loading;
+    $('mk-count').textContent =
+      (rows.length ? from + 1 + '–' + (from + rows.length) : '0') +
+      ' de ' +
+      all.length +
+      (mk.done ? '' : '+') +
+      (mk.loading && mk.rows.length ? ' · carregando…' : '');
+
+    mkPager(pages);
+  }
+
+  function mkPager(pages) {
+    const el = $('mk-pager');
+    const more = !mk.done;
+    const last = pages + (more && mk.vpage >= pages ? 1 : 0);
+    const cur = mk.vpage;
+    const nums = [];
+
+    const lo = Math.max(1, Math.min(cur - 2, last - 4));
+    const hi = Math.min(last, lo + 4);
+
+    if (lo > 1) nums.push(1);
+    if (lo > 3) nums.push('…');
+    else if (lo === 3) nums.push(2);
+
+    for (let i = lo; i <= hi; i++) nums.push(i);
+
+    if (hi < last - 2) nums.push('…');
+    else if (hi === last - 2) nums.push(last - 1);
+    if (hi < last) nums.push(last);
+
+    el.innerHTML =
+      `<button type="button" data-pg="${cur - 1}"${cur <= 1 ? ' disabled' : ''}>‹</button>` +
+      nums
+        .map((n) =>
+          n === '…'
+            ? '<span class="mk-pgdots">…</span>'
+            : `<button type="button" data-pg="${n}" class="${n === cur ? 'on' : ''}">${n}</button>`
+        )
+        .join('') +
+      `<button type="button" data-pg="${cur + 1}"${cur >= pages && !more ? ' disabled' : ''}>›</button>`;
+
+    el.hidden = pages <= 1 && !more;
+  }
+
+  function mkGoPage(n) {
+    if (!(n >= 1) || n === mk.vpage) return;
+
+    mk.vpage = n;
+    mkRender();
+    document.querySelector('#mtal-mk .mk-table-wrap').scrollTop = 0;
+
+    if (mk.cat === 'pokemon' && !mk.done && !mk.loading && mkVisible().length <= mk.vpage * MK_PAGE) mkLoad(false);
   }
 
   const wallet = { gold: null, dia: null };
@@ -8404,17 +8980,11 @@
 
     if (mk.mode === 'sell' && sl.kind === 'item') slEnsureOwned(true);
   });
-  $('mk-more').addEventListener('click', () => mkLoad(false));
+  $('mk-pager').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-pg]');
 
-  document.querySelector('#mtal-mk .mk-table-wrap').addEventListener(
-    'scroll',
-    (e) => {
-      const el = e.currentTarget;
-
-      if (mk.cat === 'pokemon' && !mk.loading && !mk.done && el.scrollTop + el.clientHeight > el.scrollHeight - 300) mkLoad(false);
-    },
-    { passive: true }
-  );
+    if (b && !b.disabled) mkGoPage(+b.dataset.pg);
+  });
 
   document.querySelectorAll('#mtal-mk .mk-cat').forEach((b) =>
     b.addEventListener('click', () => {
@@ -8681,9 +9251,18 @@
 
     const by = $('sl-sort').value;
     const num = (v) => (v == null ? -1 : v);
+    // mais recente primeiro: data de captura quando existir, senão o id (cresce a cada captura)
+    const when = (p) => {
+      const t = p.capturedAt || p.caughtAt || p.createdAt || p.obtainedAt;
+      const ms = typeof t === 'number' ? t : t ? Date.parse(t) : NaN;
+
+      return Number.isFinite(ms) ? ms : Number(p.id) || 0;
+    };
 
     return out.sort((a, b) =>
-      by === 'lvl'
+      by === 'recent'
+        ? when(b) - when(a)
+        : by === 'lvl'
         ? b.level - a.level
         : by === 'iv'
           ? num(b._iv) - num(a._iv)
@@ -8929,8 +9508,51 @@
     return !mine.some((l) => l.kind !== 'pokemon' && !l.capturedId && l.refId != null && String(l.refId) === String(c.refId));
   }
 
+  const SL_CHUNK = 30;
+
+  function slPkHtml(cards, pseudo) {
+    return cards
+      .map((c) => {
+        const key = slKey(c);
+        const h = { ...slInvHit(c), invRef: c };
+
+        if (!rpSprite(h, rpCreature(h))) pseudo.push(h);
+
+        return `<div class="sl-pk${key === sl.sel ? ' on' : ''}" data-key="${esc(key)}">${mkPokeCard(
+          h,
+          `<div class="mkc-side">
+            <div class="mk-price"></div>
+            <div class="mk-acts"><button type="button">Anunciar</button></div>
+          </div>`
+        )}</div>`;
+      })
+      .join('');
+  }
+
+  function slPkMore() {
+    const grid = $('sl-grid');
+    const wrap = $('sl-pkwrap');
+    const cards = sl._pkCards;
+
+    if (!grid || !wrap || !cards || sl._pkShown >= cards.length || !grid.clientHeight) return;
+    if (grid.scrollTop + grid.clientHeight < grid.scrollHeight - 400) return;
+
+    const pseudo = [];
+    const next = cards.slice(sl._pkShown, sl._pkShown + SL_CHUNK);
+
+    sl._pkShown += next.length;
+    wrap.insertAdjacentHTML('beforeend', slPkHtml(next, pseudo));
+    pseudo.forEach(ensureSprite);
+    requestAnimationFrame(slPkMore);
+  }
+
   function slRenderOwned() {
     const grid = $('sl-grid');
+
+    if (grid && !grid._pkScroll) {
+      grid._pkScroll = true;
+      grid.addEventListener('scroll', slPkMore, { passive: true });
+    }
 
     if (!grid) return;
 
@@ -8952,6 +9574,16 @@
     let cards = slList().filter((c) => slNotListed(c) && (!q || String(c.name).toLowerCase().includes(q)));
 
     if (poke) cards = slPokeFilter(cards);
+
+    const sig = [sl.kind, sl.view, q, rpCre ? 1 : 0, !!ownedCache, !!sl.catalog, cards.map((c) => slKey(c) + ':' + (c.owned != null ? c.owned : '') + ':' + (c.level != null ? c.level : '')).join(',')].join('|');
+
+    if (sig === sl._sig && grid.firstChild) {
+      requestAnimationFrame(slPkMore);
+      $('sl-hint').textContent = !poke && ownedCache ? 'Inventário lido há ' + ago(ownedCache.t) + '.' : '';
+      return;
+    }
+
+    sl._sig = sig;
 
     const pseudo = [];
     const list = sl.view === 'list';
@@ -8979,26 +9611,16 @@
         .join(' / ') || '-';
 
     grid.classList.toggle('list', list || poke);
+    grid.classList.toggle('itg', !list && !poke);
 
     let html;
 
+    sl._pkCards = null;
+
     if (poke && cards.length) {
-      html = `<div class="${list ? 'mkc-list' : 'mkc-grid'}">${cards
-        .map((c) => {
-          const key = slKey(c);
-          const h = { ...slInvHit(c), invRef: c };
-
-          if (!rpSprite(h, rpCreature(h))) pseudo.push(h);
-
-          return `<div class="sl-pk${key === sl.sel ? ' on' : ''}" data-key="${esc(key)}">${mkPokeCard(
-            h,
-            `<div class="mkc-side">
-              <div class="mk-price"></div>
-              <div class="mk-acts"><button type="button">Anunciar</button></div>
-            </div>`
-          )}</div>`;
-        })
-        .join('')}</div>`;
+      sl._pkCards = cards;
+      sl._pkShown = Math.min(cards.length, SL_CHUNK);
+      html = `<div id="sl-pkwrap" class="${list ? 'mkc-list' : 'mkc-grid'}">${slPkHtml(cards.slice(0, sl._pkShown), pseudo)}</div>`;
 
       if (!rpCre) {
         rpLoadCreatures().then((ok) => {
@@ -9062,6 +9684,23 @@
           })
           .join('') +
         `</tbody></table>`;
+    } else if (!poke) {
+      html = cards
+        .map((c) => {
+          const key = slKey(c);
+          const h = { hid: ++hitSeq, kind: 'items', name: c.title || c.name, raw: { icon: c.icon } };
+          const img = itemImage(h);
+
+          return `<button type="button" class="itl${key === sl.sel ? ' on' : ''}" data-key="${esc(key)}" title="${esc(c.title)}">
+            <div class="itl-ic">${img ? `<img src="${esc(img)}" onerror="this.parentElement.textContent='❔'">` : '❔'}</div>
+            <div class="itl-id">
+              <div class="itl-n">${esc(c.title)}</div>
+              <div class="itl-s">${esc(catLabel(c.category) || 'Item')}${c.npcPrice ? ' · NPC $ ' + fmt(c.npcPrice) : ''}</div>
+            </div>
+            <div class="itl-r">${fmt(c.owned)}×</div>
+          </button>`;
+        })
+        .join('');
     } else {
       html = cards
         .map((c) => {
@@ -9083,6 +9722,8 @@
     grid.innerHTML = html;
 
     pseudo.forEach(ensureSprite);
+
+    if (sl._pkCards) requestAnimationFrame(slPkMore);
 
     $('sl-hint').textContent = !poke && ownedCache ? 'Inventário lido há ' + ago(ownedCache.t) + '.' : '';
   }
@@ -9877,7 +10518,9 @@
     if (npcSt.key === key) npcRender();
   }
 
-  function npcCard(icon, name, sub, click, pokeName) {
+  function npcCard(icon, name, sub, click, pokeName, o) {
+    o = o || {};
+
     const fq = ($('npc-filter').value || '').trim().toLowerCase();
 
     if (fq && !String(name).toLowerCase().includes(fq)) return '';
@@ -9891,21 +10534,28 @@
       npcSt.pseudo.push(h);
       thumb = `<div class="mtal-hit-thumb sl-thumb" data-hid="${h.hid}">${thumbHtml(h)}</div>`;
     } else {
-      thumb = `<div class="sl-thumb">${
-        icon ? `<img src="${esc(icon)}" onerror="this.parentElement.textContent='❔'">` : '❔'
-      }</div>`;
+      thumb = icon ? `<img src="${esc(icon)}" onerror="this.parentElement.textContent='❔'">` : '❔';
     }
 
     npcSt.cards.push(click || null);
 
-    return `<${click ? 'button type="button"' : 'div'} class="sl-card${click ? '' : ' npc-ro'}" data-nc="${i}">
-      ${thumb}
-      <div class="sl-cname" title="${esc(name)}">${esc(name)}</div>
-      <div class="mk-dim">${sub}</div>
+    return `<${click ? 'button type="button"' : 'div'} class="itl${click ? '' : ' npc-ro'}" data-nc="${i}">
+      <div class="itl-ic">${thumb}</div>
+      <div class="itl-id">
+        <div class="itl-n" title="${esc(name)}">${esc(name)}</div>
+        ${sub ? `<div class="itl-s">${sub}</div>` : ''}
+      </div>
+      ${o.right ? `<div class="itl-r ${o.rcls || ''}">${o.right}</div>` : ''}
     </${click ? 'button' : 'div'}>`;
   }
 
-  const SELL_BLOCK_DEFAULT = ['Strange Pheromone', 'Bronze Boss Token', 'Rare Pokemon Picture'];
+  const SELL_BLOCK_DEFAULT = ['Strange Pheromone', 'Bronze Boss Token', 'Rare Pokémon Picture'];
+  const blkNorm = (s) =>
+    String(s || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .toLowerCase();
 
   const sellBlock = () => {
     const v = store.get('sellBlock', null);
@@ -9913,7 +10563,7 @@
     return Array.isArray(v) ? v : SELL_BLOCK_DEFAULT.slice();
   };
 
-  const isBlocked = (name) => sellBlock().some((b) => b.toLowerCase() === String(name || '').trim().toLowerCase());
+  const isBlocked = (name) => sellBlock().some((b) => blkNorm(b) === blkNorm(name));
 
   function setSellBlock(list) {
     store.set('sellBlock', list);
@@ -10132,7 +10782,7 @@
     npcLoad('depot');
   }
 
-  const npcPf = () => npcSt.pf || (npcSt.pf = { iv1: '', iv2: '', lv1: '', lv2: '', q: '', shiny: false, rar: [], sort: 'name' });
+  const npcPf = () => npcSt.pf || (npcSt.pf = { iv1: '', iv2: '', lv1: '', lv2: '', q: '', shiny: false, rar: [], sort: 'recent' });
 
   const npcPview = () => npcSt.pview || (npcSt.pview = store.get('npcPview', 'list'));
 
@@ -10158,7 +10808,7 @@
       <label class="mk-chk"><input type="checkbox" data-pf="shiny"${f.shiny ? ' checked' : ''}> ✨ Shiny</label>
       <span class="mk-f">Ordenar
         <select data-pf="sort">
-          ${[['name', 'Nome'], ['lvl', 'Nível ↓'], ['iv', 'IV ↓'], ['q', 'Qualidade ↓']]
+          ${[['recent', 'Recentes'], ['name', 'Nome'], ['lvl', 'Nível ↓'], ['iv', 'IV ↓'], ['q', 'Qualidade ↓']]
             .map(([v, l]) => `<option value="${v}"${f.sort === v ? ' selected' : ''}>${l}</option>`)
             .join('')}
         </select>
@@ -10189,6 +10839,13 @@
     const lv2 = n(f.lv2, 1);
     const qm = n(f.q);
     const num = (v) => (v == null ? -1 : Number(v));
+    // mais recente primeiro: data de captura quando existir, senão o id (cresce a cada captura)
+    const when = (p) => {
+      const t = p.capturedAt || p.caughtAt || p.createdAt || p.obtainedAt;
+      const ms = typeof t === 'number' ? t : t ? Date.parse(t) : NaN;
+
+      return Number.isFinite(ms) ? ms : Number(p.id) || 0;
+    };
 
     return list
       .filter((p) => {
@@ -10206,7 +10863,9 @@
         return true;
       })
       .sort((a, b) =>
-        f.sort === 'lvl'
+        f.sort === 'recent'
+          ? when(b) - when(a)
+          : f.sort === 'lvl'
           ? b.level - a.level
           : f.sort === 'iv'
             ? num(b.ivTotal) - num(a.ivTotal)
@@ -10475,7 +11134,6 @@
     if (!d) {
       body = `<div class="mk-empty">${npcSt.loading ? 'Carregando…' : npcSt.err ? '⚠ ' + esc(npcSt.err) : ''}</div>`;
     } else if (key === 'shop') {
-      info = 'Saldo: $ ' + fmt(d.gold);
 
       const invShop = (npcSt.data.depot && npcSt.data.depot.inventory) || [];
       const haveOf = (x, isBall) => {
@@ -10496,7 +11154,7 @@
       };
 
       const sell = (x, isBall) =>
-        npcCard(iconUrl(x.iconUrl || x.icon), x.name, '$ ' + fmt(x.priceGold) + haveTxt(x, isBall), () =>
+        npcCard(iconUrl(x.iconUrl || x.icon), x.name, haveTxt(x, isBall), () =>
           npcHit({
             name: x.name,
             category: isBall ? 'Poke Balls' : 'Items',
@@ -10532,7 +11190,9 @@
                 npcRender();
               }
             }
-          })
+          }),
+          null,
+          { right: '$ ' + fmt(x.priceGold), rcls: 'gold' }
         );
 
       const inv = (npcSt.data.depot && npcSt.data.depot.inventory) || [];
@@ -10930,6 +11590,12 @@
 
     $('npc-info').textContent = info;
     $('npc-body').innerHTML = body;
+
+    const wal = $('npc-wallet');
+    const wd = key === 'shop' && d && d.gold != null;
+
+    wal.hidden = !wd;
+    wal.innerHTML = wd ? `<span>Saldo</span><b>$ ${fmt(d.gold)}</b>` : '';
 
     npcSt.pseudo.forEach(ensureSprite);
   }
